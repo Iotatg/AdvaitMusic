@@ -24,6 +24,8 @@ struct Config {
 
     std::string meow_api_url;
     std::string meow_api_key;
+    std::string yuki_api_url{"https://music.yukiapi.site"};
+    std::string yuki_api_key;
     std::string iota_api_url{"http://127.0.0.1:8000"};
     std::string iota_api_key;
 

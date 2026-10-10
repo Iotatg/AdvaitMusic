@@ -54,6 +54,8 @@ std::string Config::load() {
 
     meow_api_url = utils::getenv_str("MEOW_API_URL");
     meow_api_key = utils::getenv_str("MEOW_API_KEY");
+    yuki_api_url = utils::getenv_str("YUKI_API_URL", utils::getenv_str("MEOW_API_URL", "https://music.yukiapi.site"));
+    yuki_api_key = utils::getenv_str("YUKI_API_KEY", utils::getenv_str("MEOW_API_KEY"));
     iota_api_url = utils::getenv_str("IOTA_API_URL", "http://127.0.0.1:8000");
     iota_api_key = utils::getenv_str("IOTA_API_KEY");
 

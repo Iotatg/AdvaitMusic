@@ -15,6 +15,7 @@ std::vector<std::unique_ptr<Platform>> all;
 
 void register_youtube();
 void register_iota();
+void register_yuki();
 
 void register_platform(std::unique_ptr<Platform> p) {
     std::lock_guard<std::mutex> g(mu);
@@ -95,8 +96,9 @@ std::vector<Track> autoplay_tracks(const Track& last, int limit, const std::vect
 
 void init_platforms() {
     register_iota();
+    register_yuki();
     register_youtube();
-    ADVAIT_LOG_INFO("platforms", "registered youtube + iotaapi");
+    ADVAIT_LOG_INFO("platforms", "registered youtube + iotaapi + yuki");
 }
 
 }  // namespace advait::platforms

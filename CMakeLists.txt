@@ -80,7 +80,8 @@ set_project_warnings(advait_database)
 add_library(advait_platforms STATIC
     src/platforms/registry.cpp
     src/platforms/youtube.cpp
-    src/platforms/iota.cpp
+        src/platforms/iota.cpp
+        src/platforms/yuki.cpp
 )
 add_library(advait::platforms ALIAS advait_platforms)
 target_include_directories(advait_platforms PUBLIC include)
