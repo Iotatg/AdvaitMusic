@@ -1,0 +1,9 @@
+build/
+database/
+downloads/
+cache/
+.env
+.env.*
+*.log
+compile_commands.json
+vcpkg_installed/

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "advaitmusic-cpp",
+  "version-string": "1.0.0",
+  "description": "AdvaitMusic C++ port — Telegram voice-chat music bot",
+  "homepage": "https://github.com/Iotatg/AdvaitMusic",
+  "license": "GPL-3.0-or-later",
+  "dependencies": [
+    "nlohmann-json",
+    "curl"
+  ],
+  "builtin-baseline": "e456309491fd875487bf02b8a0dca76c1b1b00cc"
+}

@@ -1,0 +1,106 @@
+name: Production Multi-Arch Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build Native Binary (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+            triplet: x64-linux-release
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            triplet: arm64-linux-release
+
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install System Build Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            mold \
+            ccache \
+            pkg-config \
+            libssl-dev \
+            libcurl4-openssl-dev \
+            libopus-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libavutil-dev \
+            libswresample-dev \
+            gperf \
+            zlib1g-dev
+
+      - name: Build bundled TDLib runtime (libtdjson)
+        run: |
+          git clone --depth=1 https://github.com/tdlib/td.git "$RUNNER_TEMP/td"
+          cmake -S "$RUNNER_TEMP/td" -B "$RUNNER_TEMP/td/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/td/build" --target tdjson --parallel "$(nproc)"
+          mkdir -p lib dist
+          cp -aL "$RUNNER_TEMP/td/build/libtdjson.so"* lib/
+          cp -aL "$RUNNER_TEMP/td/build/libtdjson.so"* dist/
+
+      - name: Configure ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-${{ matrix.arch }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-ccache-
+
+      - name: Cache vcpkg Binary Artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: ${{ matrix.triplet }}-vcpkg-${{ hashFiles('vcpkg.json') }}
+
+      - name: Setup vcpkg
+        run: |
+          if [ ! -d "$GITHUB_WORKSPACE/vcpkg" ]; then
+            git clone --depth=1 https://github.com/microsoft/vcpkg.git $GITHUB_WORKSPACE/vcpkg
+          fi
+          BASELINE=$(grep -oP '"builtin-baseline"\s*:\s*"\K[0-9a-f]+' vcpkg.json)
+          git -C $GITHUB_WORKSPACE/vcpkg cat-file -e "${BASELINE}^{commit}" 2>/dev/null || \
+            git -C $GITHUB_WORKSPACE/vcpkg fetch --depth=1 origin "$BASELINE"
+          $GITHUB_WORKSPACE/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/vcpkg/scripts/buildsystems/vcpkg.cmake \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+
+      - name: Build Executable
+        run: cmake --build build --target advait_bot --parallel $(nproc)
+
+      - name: Package Release Archive
+        run: |
+          mkdir -p dist
+          cp build/advait_bot dist/
+          cp -R locales dist/
+          tar -czvf advait-bot-${{ matrix.arch }}.tar.gz -C dist .
+
+      - name: Upload Binary to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: advait-bot-${{ matrix.arch }}.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
