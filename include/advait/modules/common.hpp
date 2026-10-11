@@ -114,30 +114,77 @@ inline std::string now_playing_text(int64_t chat_id, const Track& t) {
               {"by", t.requester}});
 }
 
-inline void send_now_playing(int64_t chat_id, RoomState* r, const Track& t) {
+// Edits a player-card message without knowing whether it is a photo or a plain
+// text card. Caption edits go over HTTP (fast, works on photo cards, works on
+// raw ids TDLib never saw); plain-text cards fall back to TDLib edit_text.
+inline bool card_edit(int64_t chat_id, int64_t message_id, const std::string& text,
+                      const nlohmann::json& markup = {}, bool expect_photo = false) {
     auto& bot = tg::bot();
-    auto text = now_playing_text(chat_id, t);
-    auto mk = play_markup(chat_id, r, false);
-    if (!t.artwork.empty() && !db::thumbnails_disabled(chat_id)) {
-        bot.send_photo(chat_id, t.artwork, text, mk);
-        return;
+    if (expect_photo) {
+        if (bot.edit_caption(chat_id, message_id, text, markup, true)) return true;
+        return bot.edit_text(chat_id, message_id, text, markup, nullptr, true);
     }
-    bot.send_text(chat_id, text, mk);
+    if (bot.edit_caption(chat_id, message_id, text, markup, true)) return true;
+    return bot.edit_text(chat_id, message_id, text, markup, nullptr, true);
 }
 
-// Mirrors Go helpers.go showTrackMessage: edit the live message into the
-// track card; artwork cards fall back to delete + send_photo (TDLib has no
-// bot-side editMessageMedia).
+inline void publish_card(RoomState* r, int64_t chat_id, const Track& t, const std::string& text,
+                         const nlohmann::json& mk, int64_t* out_id, bool* out_photo) {
+    auto& bot = tg::bot();
+    int64_t id = 0;
+    bool photo = false;
+    if (!t.artwork.empty() && !db::thumbnails_disabled(chat_id)) {
+        auto local = platforms::artwork_local_path(t.artwork);
+        if (!local.empty()) {
+            id = bot.send_photo_sync(chat_id, local, true, text, mk);
+            photo = id != 0;
+        }
+    }
+    if (id == 0) id = bot.send_text_sync(chat_id, text, mk);
+    if (out_id) *out_id = id;
+    if (out_photo) *out_photo = photo && id != 0;
+}
+
+inline int64_t send_now_playing(int64_t chat_id, RoomState* r, const Track& t) {
+    int64_t old = r ? r->status_msg.load() : 0;
+    auto text = now_playing_text(chat_id, t);
+    auto mk = play_markup(chat_id, r, false);
+    int64_t id = 0;
+    bool photo = false;
+    publish_card(r, chat_id, t, text, mk, &id, &photo);
+    if (r) {
+        r->status_msg = id;
+        r->status_photo = photo;
+        if (old != 0 && old != id) tg::bot().delete_message(chat_id, old);
+    }
+    return id;
+}
+
+// Mirrors Go helpers.go showTrackMessage: transform the live status message
+// into the track card (photo card first, text fallback), and take ownership
+// of the card slot on the room.
 inline void show_track(LiveMsg& lm, int64_t chat_id, RoomState* r, const Track& t,
                        const std::string& text, bool queued) {
     auto& bot = tg::bot();
+    int64_t old = r ? r->status_msg.load() : 0;
     auto mk = play_markup(chat_id, r, queued);
-    if (!t.artwork.empty() && !db::thumbnails_disabled(chat_id)) {
-        lm.remove();
-        bot.send_photo(chat_id, t.artwork, text, mk);
+    int64_t id = 0;
+    bool photo = false;
+    publish_card(r, chat_id, t, text, mk, &id, &photo);
+    if (id == 0) {
+        lm.eor(text, mk);
+        if (r) {
+            r->status_msg = lm.id;
+            r->status_photo = false;
+        }
         return;
     }
-    lm.eor(text, mk);
+    lm.remove();
+    if (r) {
+        r->status_msg = id;
+        r->status_photo = photo;
+        if (old != 0 && old != id) bot.delete_message(chat_id, old);
+    }
 }
 
 // Downloads the track while editing `lm` into a live progress message.

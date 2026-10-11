@@ -141,7 +141,7 @@ cb_pause_success: "⏸️ संगीत {position} पर रोका गय�
 cb_pause_message: |
   <b>{emoji:⏸️} संगीत विराम</b>
 
-  <b>▫ संगीत:</b> <a href="{url}">{title}</a>
+  <b>▫ संगीत:</b> {title}
   <b>▫ स्थिति:</b> {position} / {duration}
   <b>▫ विरामकर्ता:</b> {user}
 
@@ -152,7 +152,7 @@ cb_resume_success: "▶️ {position} पर पुनः आरम्भ।"
 cb_resume_message: |
   <b>{emoji:🎵} अब चल रहा है:</b>
 
-  <b>▫ संगीत:</b> <a href="{url}">{title}</a>
+  <b>▫ संगीत:</b> {title}
   <b>▫ अवधि:</b> {duration}
   <b>▫ पुनः आरम्भकर्ता:</b> {user}
 
@@ -177,7 +177,7 @@ cb_mute_success: "🔇 निःशब्द किया गया।"
 cb_mute_message: |
   <b>{emoji:🔇} संगीत निःशब्द</b>
 
-  <b>▫ संगीत:</b> <a href="{url}">{title}</a>
+  <b>▫ संगीत:</b> {title}
   <b>▫ निःशब्दकर्ता:</b> {user}
 
 cb_unmute_success: "🔊 सशब्द किया गया।"
@@ -333,7 +333,7 @@ logger_bot_started: |
   <b>परिचय पत्र:</b> {user_id}
   
 
-logger_playback_template: "<b>{emoji:🎧} संगीत:</b> <a href=\"{track_url}\">{track}</a>\n<b>{emoji:🔗} स्रोत:</b> {source}\n<b>{emoji:📌} समूह:</b> {group} ({group_id})\n<b>{emoji:👤} अनुरुद्धकर्ता:</b> {requested_by} (<code>{requested_by_id}</code>)"
+logger_playback_template: "<b>{emoji:🎧} संगीत:</b> {track}\n<b>{emoji:🔗} स्रोत:</b> {source}\n<b>{emoji:📌} समूह:</b> {group} ({group_id})\n<b>{emoji:👤} अनुरुद्धकर्ता:</b> {requested_by} (<code>{requested_by_id}</code>)"
 
 loop_usage: "{emoji:🔁} <b>आवृत्ति नियन्त्रण</b>\n\nप्रयोग: {cmd} [संख्या]\n• 0 - आवृत्ति अक्षम करें\n• 1-10 - आवृत्ति संख्या\n\n<i>{count_line}</i>"
 loop_invalid: "{emoji:⚠️} <b>अमान्य आवृत्ति संख्या।</b>\nअक्षम करने के लिए 0 या आवृत्ति निर्धारित करने के लिए 1-10 का प्रयोग करें।"
@@ -437,7 +437,7 @@ play_download_failed: "{emoji:❌} डाउनलोड विफल। कृ�
 play_added_to_queue_single: |
   <b>{emoji:🎵} प्रतीक्षा सूची में जोड़ा गया:</b> #{index}
 
-  <b>▫ संगीत:</b> <a href="{url}">{title}</a>
+  <b>▫ संगीत:</b> {title}
   <b>▫ अवधि:</b> {duration}
   <b>▫ अनुरुद्धकर्ता:</b> {by}
 
@@ -761,7 +761,7 @@ stream_play_fail: "{emoji:❌} संगीत चलाने में वि�
 stream_now_playing: |
   <b>{emoji:🎵} अब चल रहा है:</b>
 
-  <b>▫ संगीत:</b> <a href="{url}">{title}</a>
+  <b>▫ संगीत:</b> {title}
   <b>▫ अवधि:</b> {duration}
   <b>▫ अनुरुद्धकर्ता:</b> {by}
 

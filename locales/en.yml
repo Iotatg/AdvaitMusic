@@ -211,7 +211,7 @@ cb_pause_success: "⏸️ ᴛʀᴧᴄᴋ ᴘᴧᴜsєᴅ ᴧᴛ {position}"
 cb_pause_message: |
   <b>{emoji:⏸️} ᴛʀᴧᴄᴋ ᴘᴧᴜsєᴅ</b>
 
-  <b>▫ ᴛʀᴧᴄᴋ:</b> <a href="{url}">{title}</a>
+  <b>▫ ᴛʀᴧᴄᴋ:</b> {title}
   <b>▫ ᴘσsɪᴛɪση:</b> {position} / {duration}
   <b>▫ ᴘᴧᴜsєᴅ ʙʏ:</b> {user}
 
@@ -225,7 +225,7 @@ cb_resume_success: "▶️ ʀєsᴜᴍєᴅ ᴧᴛ {position}."
 cb_resume_message: |
   <b>{emoji:🎵} ησᴡ ᴘʟᴧʏɪηɢ:</b>
 
-  <b>▫ ᴛʀᴧᴄᴋ:</b> <a href="{url}">{title}</a>
+  <b>▫ ᴛʀᴧᴄᴋ:</b> {title}
   <b>▫ ᴅᴜʀᴧᴛɪση:</b> {duration}
   <b>▫ ʀєsᴜᴍєᴅ ʙʏ:</b> {user}
 
@@ -265,7 +265,7 @@ cb_mute_success: "🔇 ᴍᴜᴛєᴅ."
 cb_mute_message: |
   <b>{emoji:🔇} ᴘʟᴧʏʙᴧᴄᴋ ᴍᴜᴛєᴅ</b>
 
-  <b>▫ ᴛʀᴧᴄᴋ:</b> <a href="{url}">{title}</a>
+  <b>▫ ᴛʀᴧᴄᴋ:</b> {title}
   <b>▫ ᴍᴜᴛєᴅ ʙʏ:</b> {user}
 
 cb_unmute_success: "🔊 ᴜηᴍᴜᴛєᴅ."
@@ -460,7 +460,7 @@ logger_bot_started: |
   <b>ᴜsєʀηᴧᴍє:</b> {user_username}
   <b>ɪᴅ:</b> {user_id}
 
-logger_playback_template: "<b>{emoji:🎧} ᴛʀᴧᴄᴋ:</b> <a href=\"{track_url}\">{track}</a>\n<b>{emoji:🔗} sσᴜʀᴄє:</b> {source}\n<b>{emoji:📌} ɢʀσᴜᴘ:</b> {group} ({group_id})\n<b>{emoji:👤} ʀєǫᴜєsᴛєᴅ ʙʏ:</b> {requested_by} (<code>{requested_by_id}</code>)"
+logger_playback_template: "<b>{emoji:🎧} ᴛʀᴧᴄᴋ:</b> {track}\n<b>{emoji:🔗} sσᴜʀᴄє:</b> {source}\n<b>{emoji:📌} ɢʀσᴜᴘ:</b> {group} ({group_id})\n<b>{emoji:👤} ʀєǫᴜєsᴛєᴅ ʙʏ:</b> {requested_by} (<code>{requested_by_id}</code>)"
 
 loop_usage: "{emoji:🔁} <b>ʟσσᴘ ᴄσηᴛʀσʟ</b>\n\nᴜsᴧɢє: {cmd} [ᴄσᴜηᴛ]\n• 0 - ᴅɪsᴧʙʟє ʟσσᴘ\n• 1-10 - ʟσσᴘ ᴄσᴜηᴛ\n\n<i>{count_line}</i>"
 
@@ -601,7 +601,7 @@ play_download_failed: "{emoji:❌} ᴅσᴡηʟσᴧᴅ ғᴧɪʟєᴅ. ᴘʟє�
 
 play_added_to_queue_single: |
   <blockquote><b>{emoji:💮} ɪηᴄσᴍɪηɢ ᴛʀᴧᴄᴋ ᴅєᴛєᴄᴛєᴅ : #{index}</b></blockquote>
-  <blockquote expandable><b>{emoji:🎋} ᴍєʟσᴅʏ :</b> <a href="{url}">{title}</a>
+  <blockquote expandable><b>{emoji:🎋} ᴍєʟσᴅʏ :</b> {title}
   <b>{emoji:✨} ʟєηɢᴛʜ :</b> {duration}
   <b>{emoji:🥀} ʀєǫᴜєsᴛєʀ :</b> {by}
 
@@ -1019,7 +1019,7 @@ stream_play_fail: "{emoji:❌} ғᴧɪʟєᴅ ᴛσ ᴘʟᴧʏ ᴛʜє sσηɢ."
 
 stream_now_playing: |
   <blockquote><b>{emoji:💮} ᴘʟᴧʏʙᴧᴄᴋ ᴧᴄᴛɪᴠᴧᴛєᴅ. | єηᴊσʏ ᴛʜє ᴍᴜsɪᴄ |</b></blockquote>
-  <blockquote expandable>▫ <b>ᴍєʟσᴅʏ :</b> <a href="{url}">{title}</a>
+  <blockquote expandable>▫ <b>ᴍєʟσᴅʏ :</b> {title}
   ▫ <b>ʟєηɢᴛʜ :</b> {duration}
   ▫ <b>ʀєǫᴜєsᴛєʀ :</b> {by}</blockquote>
 

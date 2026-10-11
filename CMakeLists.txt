@@ -28,6 +28,8 @@ endif()
 
 find_package(Threads REQUIRED)
 find_package(CURL REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(ZLIB REQUIRED)
 
 find_package(nlohmann_json 3.10 CONFIG QUIET)
 if(NOT nlohmann_json_FOUND)
@@ -82,6 +84,7 @@ add_library(advait_platforms STATIC
     src/platforms/youtube.cpp
         src/platforms/iota.cpp
         src/platforms/yuki.cpp
+        src/platforms/artwork.cpp
 )
 add_library(advait::platforms ALIAS advait_platforms)
 target_include_directories(advait_platforms PUBLIC include)
@@ -94,9 +97,24 @@ add_library(advait_ntg STATIC
 )
 add_library(advait::ntg ALIAS advait_ntg)
 target_include_directories(advait_ntg PUBLIC include ${ADVAIT_NTG_INCLUDE})
-target_link_libraries(advait_ntg PUBLIC advait::core)
+target_link_libraries(advait_ntg PUBLIC advait::core advait::mtproto)
 if(NTGCALLS_LIB)
-    target_link_libraries(advait_ntg PUBLIC ${NTGCALLS_LIB} m z resolv ${CMAKE_DL_LIBS})
+    # libntgcalls bundles its own BoringSSL; force its crypto objects into the
+    # executable so WebRTC never binds ASN1_*/d2i_* etc. to the mismatched
+    # system libcrypto ABI. The trimmed archive lacks those members to avoid
+    # duplicate definitions with the forced subset.
+    get_filename_component(_ntg_dir "${NTGCALLS_LIB}" DIRECTORY)
+    set(_ntg_trimmed "${_ntg_dir}/libntgcalls_trimmed.a")
+    set(_ntg_forced "${_ntg_dir}/libntgcalls_boringssl_forced.a")
+    if(EXISTS "${_ntg_trimmed}" AND EXISTS "${_ntg_forced}")
+        target_link_libraries(advait_ntg PUBLIC "${_ntg_trimmed}" m z resolv ${CMAKE_DL_LIBS})
+        set_property(TARGET advait_ntg PROPERTY LINK_DEPENDS "${_ntg_trimmed}")
+        set_property(TARGET advait_ntg PROPERTY LINK_DEPENDS "${_ntg_forced}")
+        target_link_options(advait_ntg INTERFACE
+            "-Wl,--whole-archive" "${_ntg_forced}" "-Wl,--no-whole-archive")
+    else()
+        target_link_libraries(advait_ntg PUBLIC "${NTGCALLS_LIB}" m z resolv ${CMAKE_DL_LIBS})
+    endif()
     target_compile_definitions(advait_ntg PUBLIC ADVAIT_WITH_NTGCALLS)
 endif()
 set_project_warnings(advait_ntg)
@@ -105,6 +123,19 @@ add_library(advait_telegram STATIC
     src/telegram/tdlib.cpp
     src/telegram/dispatcher.cpp
 )
+add_library(advait_mtproto STATIC
+    src/mtproto/session.cpp
+    src/mtproto/client.cpp
+    src/mtproto/groupcall.cpp
+)
+add_library(advait::mtproto ALIAS advait_mtproto)
+target_include_directories(advait_mtproto PUBLIC include)
+target_link_libraries(advait_mtproto PUBLIC
+    advait::core
+    OpenSSL::Crypto
+    ZLIB::ZLIB
+)
+set_project_warnings(advait_mtproto)
 add_library(advait::telegram ALIAS advait_telegram)
 target_include_directories(advait_telegram PUBLIC include)
 target_link_libraries(advait_telegram PUBLIC
@@ -115,6 +146,23 @@ target_link_libraries(advait_telegram PUBLIC
     ${CMAKE_DL_LIBS}
 )
 set_project_warnings(advait_telegram)
+
+add_executable(mtproto_probe
+    tools/mtproto_probe.cpp
+    src/ntgcalls/resolver_compat.c
+)
+# ntgcalls first: its bundled BoringSSL ASN1_* must be defined in the
+# executable so WebRTC does not interpose against system libcrypto.
+target_link_libraries(mtproto_probe PRIVATE advait::ntg advait::mtproto advait::core)
+set_project_warnings(mtproto_probe)
+
+add_executable(ubot_smoke
+    tools/ubot_smoke.cpp
+    src/ntgcalls/resolver_compat.c
+)
+target_link_libraries(ubot_smoke PRIVATE advait::ntg advait::core)
+set_project_warnings(ubot_smoke)
+
 
 add_library(advait_modules STATIC
     src/modules/handlers.cpp
@@ -131,6 +179,7 @@ add_library(advait_modules STATIC
     src/modules/admin_lists.cpp
     src/modules/admin_system.cpp
     src/modules/playlists.cpp
+    src/modules/monitor.cpp
 )
 add_library(advait::modules ALIAS advait_modules)
 target_include_directories(advait_modules PUBLIC include)

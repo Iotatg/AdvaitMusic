@@ -7,3 +7,5 @@ cache/
 *.log
 compile_commands.json
 vcpkg_installed/
+lib/libntgcalls_trimmed.a
+

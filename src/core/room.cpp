@@ -169,7 +169,12 @@ void RoomState::add_played_locked(const Track& t) {
 bool RoomState::play_native() {
     if (!assistant || !assistant->ntg) return false;
     auto desc = ntg::media_from_file(file_path_, position_, speed_, track_ && track_->video);
-    return assistant->ntg->play(id, desc);
+    std::string err;
+    if (!assistant->ntg->play(id, desc, &err)) {
+        ADVAIT_LOG_WARN("room", "play_native failed for " + std::to_string(id) + ": " + err);
+        return false;
+    }
+    return true;
 }
 
 bool RoomState::play(const Track& t, const std::string& path, bool force) {
@@ -204,11 +209,18 @@ bool RoomState::play(const Track& t, const std::string& path, bool force) {
 
 bool RoomState::pause() {
     if (destroyed()) return false;
+    bool was_muted = false;
     {
         std::lock_guard<std::mutex> g(mu_);
         if (paused_) return true;
+        was_muted = muted_;
     }
     if (assistant && assistant->ntg) assistant->ntg->pause(id);
+    // Go: pausing a muted room unmutes the call output so the later resume is audible.
+    if (was_muted && assistant && assistant->ntg) {
+        std::lock_guard<std::mutex> g(mu_);
+        if (muted_ && assistant && assistant->ntg) assistant->ntg->unmute(id);
+    }
     {
         std::lock_guard<std::mutex> g(mu_);
         update_position();
@@ -240,12 +252,21 @@ bool RoomState::resume() {
 
 bool RoomState::replay() {
     if (destroyed()) return false;
+    bool was_muted = false;
+    int old_pos = 0;
     {
         std::lock_guard<std::mutex> g(mu_);
         if (!track_ || file_path_.empty()) return false;
+        was_muted = muted_;
+        old_pos = position_;
         position_ = 0;
     }
-    if (!play_native()) return false;
+    if (!play_native()) {
+        std::lock_guard<std::mutex> g(mu_);
+        position_ = old_pos;
+        return false;
+    }
+    if (was_muted && assistant && assistant->ntg) assistant->ntg->unmute(id);
     std::lock_guard<std::mutex> g(mu_);
     position_ = 0;
     paused_ = false;
@@ -270,6 +291,7 @@ bool RoomState::stop() {
 
 bool RoomState::seek(int seconds) {
     if (destroyed()) return false;
+    bool was_muted = false;
     {
         std::lock_guard<std::mutex> g(mu_);
         if (!track_ || file_path_.empty()) return false;
@@ -278,11 +300,15 @@ bool RoomState::seek(int seconds) {
         int new_pos = position_ + seconds;
         if (new_pos >= track_->duration) new_pos = track_->duration - kSeekSafetyMargin;
         if (new_pos < 0) new_pos = 0;
+        was_muted = muted_;
         position_ = new_pos;
         paused_ = false;
         muted_ = false;
     }
-    return play_native();
+    if (!play_native()) return false;
+    // Go: seeks drop mute state; if the call output was muted, unmute it again.
+    if (was_muted && assistant && assistant->ntg) assistant->ntg->unmute(id);
+    return true;
 }
 
 bool RoomState::set_speed(double speed) {
@@ -303,9 +329,17 @@ bool RoomState::set_speed(double speed) {
 
 bool RoomState::mute() {
     if (destroyed()) return false;
+    bool was_paused = false;
     {
         std::lock_guard<std::mutex> g(mu_);
         if (muted_) return true;
+        was_paused = paused_;
+    }
+    // Go: muting a paused room resumes playback first (mute implies audible-stream state).
+    if (was_paused) {
+        if (assistant && assistant->ntg) assistant->ntg->resume(id);
+        std::lock_guard<std::mutex> g(mu_);
+        paused_ = false;
     }
     if (assistant && assistant->ntg) assistant->ntg->mute(id);
     std::lock_guard<std::mutex> g(mu_);

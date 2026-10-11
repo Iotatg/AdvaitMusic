@@ -49,8 +49,8 @@ void handle_queue(const tg::Message& m, bool cplay) {
     std::ostringstream b;
     b << F(chat_id, "queue_header") << "\n\n";
     b << F(chat_id, "queue_now_playing") << "\n";
-    b << "🎧 <a href=\"" << t->url << "\">" << utils::escape_html(utils::short_title(t->title, 35))
-      << "</a> — " << t->requester << " [" << utils::format_duration(t->duration) << "]\n\n";
+    b << "🎧 " << utils::escape_html(utils::short_title(t->title, 35))
+      << " — " << t->requester << " [" << utils::format_duration(t->duration) << "]\n\n";
 
     auto queue = r->queue();
     auto q = static_cast<int>(queue.size());
@@ -61,8 +61,8 @@ void handle_queue(const tg::Message& m, bool cplay) {
         if (use_quote) b << "<blockquote>";
         for (int i = 0; i < q && i < 10; ++i) {
             auto& track = queue[static_cast<size_t>(i)];
-            b << (i + 1) << ". 🎵 <a href=\"" << track.url << "\">"
-              << utils::escape_html(utils::short_title(track.title, 35)) << "</a> — " << track.requester
+            b << (i + 1) << ". 🎵 "
+              << utils::escape_html(utils::short_title(track.title, 35)) << " — " << track.requester
               << " [" << utils::format_duration(track.duration) << "]\n";
         }
         if (use_quote) b << "</blockquote>";

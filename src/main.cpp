@@ -106,7 +106,14 @@ int main() {
     for (size_t i = 0; i < cfg.string_sessions.size(); ++i) {
         auto a = std::make_unique<advait::Assistant>();
         a->index = static_cast<int>(i + 1);
-        a->ntg = std::make_unique<advait::ubot::Context>();
+        std::shared_ptr<advait::mtproto::Client> mt;
+        try {
+            auto ses = advait::mtproto::Client::parse_session_string(cfg.string_sessions[i]);
+            mt = std::make_shared<advait::mtproto::Client>(ses, advait::mtproto::ClientConfig{});
+        } catch (const std::exception& e) {
+            ADVAIT_LOG_ERROR("main", std::string("assistant session parse failed: ") + e.what());
+        }
+        a->ntg = std::make_unique<advait::ubot::Context>(std::move(mt));
         assistants.add(std::move(a));
     }
     advait::db::init_assistant_indexes(assistants.count());

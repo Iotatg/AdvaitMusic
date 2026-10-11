@@ -4,6 +4,7 @@
 #include "advait/core/logger.hpp"
 #include "advait/core/utils.hpp"
 
+#include <curl/curl.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #include <atomic>
@@ -13,7 +14,43 @@ namespace advait::tg {
 
 namespace {
 TdClient* g_bot = nullptr;
+
+nlohmann::json td_markup_to_bot(const nlohmann::json& mk) {
+    if (!mk.is_object() || mk.value("@type", "") != "replyMarkupInlineKeyboard") return nullptr;
+    auto style = [](const nlohmann::json& b) -> std::string {
+        if (!b.contains("style") || !b["style"].is_object()) return {};
+        auto t = b["style"].value("@type", "");
+        if (t == "buttonStyleDanger") return "danger";
+        if (t == "buttonStyleSuccess") return "success";
+        if (t == "buttonStylePrimary") return "primary";
+        return {};
+    };
+    nlohmann::json rows = nlohmann::json::array();
+    if (mk.contains("rows") && mk["rows"].is_array()) {
+        for (const auto& row : mk["rows"]) {
+            nlohmann::json r = nlohmann::json::array();
+            for (const auto& b : row) {
+                nlohmann::json out{{"text", b.value("text", "")}};
+                const nlohmann::json t = b.value("type", nlohmann::json::object());
+                auto tt = t.value("@type", "");
+                if (tt == "inlineKeyboardButtonTypeCallback")
+                    out["callback_data"] = utils::base64_decode(t.value("data", ""));
+                else if (tt == "inlineKeyboardButtonTypeUrl")
+                    out["url"] = t.value("url", "");
+                else if (tt == "inlineKeyboardButtonTypeSwitchInlineQuery")
+                    out["switch_inline_query_current_chat"] = t.value("query", "");
+                else
+                    continue;
+                auto s = style(b);
+                if (!s.empty()) out["style"] = s;
+                r.push_back(std::move(out));
+            }
+            rows.push_back(std::move(r));
+        }
+    }
+    return nlohmann::json{{"inline_keyboard", rows}};
 }
+}  // namespace
 
 TdClient& bot() {
     static TdClient c;
@@ -136,6 +173,7 @@ bool TdClient::send_text(int64_t chat_id, const std::string& text, const nlohman
         {"@type", "inputMessageText"},
         {"text", {{"@type", "formattedText"}, {"text", text}, {"entities", nlohmann::json::array()}}},
         {"parse_mode", {{"@type", "textParseModeHTML"}}},
+        {"link_preview_options", {{"@type", "linkPreviewOptions"}, {"is_disabled", true}}},
     };
     if (!text.empty()) {
         auto parsed = execute({{"@type", "parseTextEntities"},
@@ -195,6 +233,7 @@ int64_t TdClient::send_text_sync(int64_t chat_id, const std::string& text, const
             plain = parsed.value("text", text);
         }
     }
+    content["link_preview_options"] = {{"@type", "linkPreviewOptions"}, {"is_disabled", true}};
     nlohmann::json q = {
         {"@type", "sendMessage"},
         {"chat_id", chat_id},
@@ -277,12 +316,13 @@ bool TdClient::reply_text(const Message& m, const std::string& text, const nlohm
     return true;
 }
 
-bool TdClient::edit_text(int64_t chat_id, int64_t message_id, const std::string& text, const nlohmann::json& markup,
-                         int64_t* final_id) {
+bool TdClient::edit_text(int64_t chat_id, int64_t message_id, const std::string& text,
+                         const nlohmann::json& markup, int64_t* final_id, bool quiet) {
     auto parsed = execute({{"@type", "parseTextEntities"},
                            {"text", text},
                            {"parse_mode", {{"@type", "textParseModeHTML"}}}});
-    nlohmann::json content = {{"@type", "inputMessageText"}, {"text", parsed.is_object() ? parsed : nlohmann::json{{"@type", "formattedText"}, {"text", text}}}};
+    nlohmann::json content = {{"@type", "inputMessageText"}, {"text", parsed.is_object() ? parsed : nlohmann::json{{"@type", "formattedText"}, {"text", text}}},
+                              {"link_preview_options", {{"@type", "linkPreviewOptions"}, {"is_disabled", true}}}};
     auto attempt = [&](int64_t mid) -> nlohmann::json {
         nlohmann::json q = {
             {"@type", "editMessageText"},
@@ -314,7 +354,7 @@ bool TdClient::edit_text(int64_t chat_id, int64_t message_id, const std::string&
                          msg.find("can't be edited") != std::string::npos ||
                          msg.find("SENDING") != std::string::npos;
         if (!retriable || std::chrono::steady_clock::now() > deadline) {
-            ADVAIT_LOG_ERROR("TDLib", std::string("edit_text failed: ") + resp.dump().substr(0, 200));
+            if (!quiet) ADVAIT_LOG_ERROR("TDLib", std::string("edit_text failed: ") + resp.dump().substr(0, 200));
             return false;
         }
         // The send may still be finalizing (local id not yet remapped to the
@@ -337,7 +377,69 @@ bool TdClient::edit_text(int64_t chat_id, int64_t message_id, const std::string&
     }
 }
 
-bool TdClient::send_photo(int64_t chat_id, const std::string& photo, const std::string& caption, const nlohmann::json& markup) {
+nlohmann::json TdClient::bot_api(const std::string& method,
+                                 const std::vector<std::pair<std::string, std::string>>& fields,
+                                 const std::string& file_field, const std::string& file_path,
+                                 int timeout_ms) {
+    static std::atomic<long> curl_seq{0};
+    CURL* c = curl_easy_init();
+    if (!c || token_.empty()) {
+        if (c) curl_easy_cleanup(c);
+        return {};
+    }
+    std::string url = "https://api.telegram.org/bot" + token_ + "/" + method;
+    std::string body;
+    std::string resp;
+    struct curl_httppost* form = nullptr;
+    struct curl_httppost* last = nullptr;
+    bool multipart = !file_field.empty() && !file_path.empty();
+    if (multipart) {
+        for (auto& [k, v] : fields)
+            curl_formadd(&form, &last, CURLFORM_COPYNAME, k.c_str(), CURLFORM_COPYCONTENTS, v.c_str(),
+                         CURLFORM_END);
+        curl_formadd(&form, &last, CURLFORM_COPYNAME, file_field.c_str(), CURLFORM_FILE, file_path.c_str(),
+                     CURLFORM_CONTENTTYPE, "image/jpeg", CURLFORM_END);
+        curl_easy_setopt(c, CURLOPT_HTTPPOST, form);
+    } else {
+        bool first = true;
+        for (auto& [k, v] : fields) {
+            char* e = curl_easy_escape(c, v.c_str(), static_cast<int>(v.size()));
+            if (!e) continue;
+            if (!first) body += '&';
+            first = false;
+            body += k + "=" + e;
+            curl_free(e);
+        }
+        curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    }
+    static size_t (*const k_write)(void*, size_t, size_t, void*) = [](void* p, size_t s, size_t n, void* ud) -> size_t {
+        static_cast<std::string*>(ud)->append(static_cast<char*>(p), s * n);
+        return s * n;
+    };
+    (void)curl_seq;
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    if (multipart) curl_easy_setopt(c, CURLOPT_HTTPPOST, form);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, k_write);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, timeout_ms / 1000);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    CURLcode rc = curl_easy_perform(c);
+    if (multipart) curl_formfree(form);
+    curl_easy_cleanup(c);
+    if (rc != CURLE_OK) {
+        ADVAIT_LOG_WARN("BotApi", method + ": curl error: " + std::string(curl_easy_strerror(rc)));
+        return {};
+    }
+    auto j = nlohmann::json::parse(resp, nullptr, false);
+    if (j.is_discarded()) return {};
+    return j;
+}
+
+bool TdClient::send_photo(int64_t chat_id, const std::string& photo, const std::string& caption,
+ const nlohmann::json& markup) {
     auto parsed = execute({{"@type", "parseTextEntities"},
                            {"text", caption},
                            {"parse_mode", {{"@type", "textParseModeHTML"}}}});
@@ -354,6 +456,65 @@ bool TdClient::send_photo(int64_t chat_id, const std::string& photo, const std::
     return true;
 }
 
+int64_t TdClient::send_photo_sync(int64_t chat_id, const std::string& photo, bool local_path,
+                                  const std::string& caption, const nlohmann::json& markup, int64_t reply_to,
+                                  int timeout_ms) {
+    // Bot-mode TDLib cannot attach files ("InputFile is not specified"), so photo
+    // cards go through the plain Bot HTTP API. Raw chat/message ids match across
+    // both channels, so editing/deleting stays on TDLib.
+    std::vector<std::pair<std::string, std::string>> f = {
+        {"chat_id", std::to_string(chat_id)},
+        {"caption", caption},
+        {"parse_mode", "HTML"},
+        {"disable_web_page_preview", "true"},
+        {"allow_sending_without_reply", "true"},
+    };
+    if (reply_to != 0) f.emplace_back("reply_to_message_id", std::to_string(reply_to));
+    auto mk = td_markup_to_bot(markup);
+    if (!mk.is_null()) f.emplace_back("reply_markup", mk.dump());
+    bool use_file = local_path && ::access(photo.c_str(), R_OK) == 0;
+    if (!use_file) f.emplace_back("photo", photo);
+    auto resp = bot_api("sendPhoto", f, use_file ? "photo" : "", use_file ? photo : "", timeout_ms);
+    if (resp.value("ok", false) && resp.contains("result") && resp["result"].is_object())
+        return resp["result"].value("message_id", 0LL);
+    ADVAIT_LOG_WARN("BotApi", "sendPhoto failed: " + resp.dump().substr(0, 200));
+    return 0;
+}
+
+bool TdClient::edit_caption(int64_t chat_id, int64_t message_id, const std::string& caption_html,
+                            const nlohmann::json& markup, bool quiet) {
+    if (message_id == 0) return false;
+    std::vector<std::pair<std::string, std::string>> f = {
+        {"chat_id", std::to_string(chat_id)},
+        {"message_id", std::to_string(message_id)},
+        {"caption", caption_html},
+        {"parse_mode", "HTML"},
+    };
+    auto mk = td_markup_to_bot(markup);
+    if (!mk.is_null()) f.emplace_back("reply_markup", mk.dump());
+    auto resp = bot_api("editMessageCaption", f);
+    if (resp.value("ok", false)) return true;
+    auto desc = resp.value("description", std::string());
+    if (desc.find("not modified") != std::string::npos) return true;
+    if (!quiet) ADVAIT_LOG_WARN("BotApi", "editMessageCaption failed: " + resp.dump().substr(0, 200));
+    return false;
+}
+
+bool TdClient::edit_markup(int64_t chat_id, int64_t message_id, const nlohmann::json& markup, bool quiet) {
+    if (message_id == 0) return false;
+    auto mk = td_markup_to_bot(markup);
+    if (mk.is_null()) return false;
+    auto resp = bot_api("editMessageReplyMarkup", {{"chat_id", std::to_string(chat_id)},
+                                                   {"message_id", std::to_string(message_id)},
+                                                   {"reply_markup", mk.dump()}});
+    if (resp.value("ok", false)) return true;
+    auto desc = resp.value("description", std::string());
+    if (desc.find("not modified") != std::string::npos || desc.find("message is not modified") != std::string::npos)
+        return true;
+    if (!quiet) ADVAIT_LOG_WARN("BotApi", "editMessageReplyMarkup failed: " + resp.dump().substr(0, 200));
+    return false;
+}
+
 bool TdClient::answer_callback(int64_t query_id, const std::string& text, bool alert) {
     send_query({{"@type", "answerCallbackQuery"},
                 {"callback_query_id", query_id},
@@ -364,8 +525,12 @@ bool TdClient::answer_callback(int64_t query_id, const std::string& text, bool a
 }
 
 bool TdClient::delete_message(int64_t chat_id, int64_t message_id) {
-    send_query({{"@type", "deleteMessages"}, {"chat_id", chat_id}, {"message_ids", nlohmann::json::array({message_id})}, {"revoke", true}});
-    return true;
+    if (message_id == 0) return false;
+    // HTTP works for messages sent over either channel (TDLib bot mode and HTTP
+    // both use raw Bot API message ids); TDLib cannot see HTTP-sent messages.
+    auto resp = bot_api("deleteMessage", {{"chat_id", std::to_string(chat_id)},
+                                          {"message_id", std::to_string(message_id)}});
+    return resp.value("ok", false);
 }
 
 void TdClient::handle_authorization(const nlohmann::json& state) {

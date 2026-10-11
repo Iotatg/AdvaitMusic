@@ -60,8 +60,13 @@ public:
     bool wait_sent(int64_t chat_id, int64_t message_id, int timeout_ms = 5000);
     bool reply_text(const Message& m, const std::string& text, const nlohmann::json& markup = {});
     bool edit_text(int64_t chat_id, int64_t message_id, const std::string& text, const nlohmann::json& markup = {},
-                   int64_t* final_id = nullptr);
+                   int64_t* final_id = nullptr, bool quiet = false);
     bool send_photo(int64_t chat_id, const std::string& photo, const std::string& caption, const nlohmann::json& markup = {});
+    int64_t send_photo_sync(int64_t chat_id, const std::string& photo, bool local_path, const std::string& caption,
+                            const nlohmann::json& markup = {}, int64_t reply_to = 0, int timeout_ms = 20000);
+    bool edit_caption(int64_t chat_id, int64_t message_id, const std::string& caption_html,
+                      const nlohmann::json& markup = {}, bool quiet = false);
+    bool edit_markup(int64_t chat_id, int64_t message_id, const nlohmann::json& markup, bool quiet = false);
     bool answer_callback(int64_t query_id, const std::string& text = {}, bool alert = false);
     bool delete_message(int64_t chat_id, int64_t message_id);
 
@@ -101,6 +106,10 @@ private:
     void send_query(const nlohmann::json& q);
     nlohmann::json send_query_sync(const nlohmann::json& q, int timeout_ms);
     nlohmann::json execute(const nlohmann::json& q);
+    nlohmann::json bot_api(const std::string& method,
+                           const std::vector<std::pair<std::string, std::string>>& fields,
+                           const std::string& file_field = {}, const std::string& file_path = {},
+                           int timeout_ms = 20000);
     void process(const nlohmann::json& update);
     void handle_authorization(const nlohmann::json& state);
     void handle_message(const nlohmann::json& msg);

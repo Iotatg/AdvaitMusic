@@ -760,9 +760,6 @@ std::string active_track_cell(const RoomState* r) {
   if (!t) return "<i>\xF0\x9F\x94\x87 No song playing.</i>";
   auto title = utils::escape_html(utils::short_title(t->title, 25));
   auto duration = utils::format_duration(t->duration);
-  if (!t->url.empty()) {
-    return "<a href=\"" + t->url + "\">" + title + "</a> <i>(" + duration + ")</i>";
-  }
   return title + " <i>(" + duration + ")</i>";
 }
 

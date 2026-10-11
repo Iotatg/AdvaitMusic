@@ -20,6 +20,10 @@ public:
     int64_t id{0};
     int64_t chat_id{0};
     Assistant* assistant{nullptr};
+    // Live now-playing card message (Go RoomState.statusMsg): id 0 when no
+    // card is on screen; the monitor edits this one in place.
+    std::atomic<int64_t> status_msg{0};
+    std::atomic<bool> status_photo{false};
 
     bool play(const Track& t, const std::string& path, bool force = false);
     bool pause();

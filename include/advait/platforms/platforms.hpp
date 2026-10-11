@@ -18,6 +18,10 @@ struct DownloadHooks {
     std::function<void(double percentage, double bytes_per_sec, long eta_sec, double elapsed_sec)> progress;
 };
 
+// Fetches artwork into cache/art/ and returns the cached local path, "" on
+// failure. TDLib inputFile needs a local file; remote URLs are not accepted.
+std::string artwork_local_path(const std::string& url);
+
 class Platform {
 public:
     virtual ~Platform() = default;

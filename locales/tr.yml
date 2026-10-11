@@ -142,7 +142,7 @@ cb_pause_success: "⏸️ Parça {position} konumunda duraklatıldı"
 cb_pause_message: |
   <b>{emoji:⏸️} Parça Duraklatıldı</b>
 
-  <b>▫ Parça:</b> <a href="{url}">{title}</a>
+  <b>▫ Parça:</b> {title}
   <b>▫ Konum:</b> {position} / {duration}
   <b>▫ Duraklatan:</b> {user}
 
@@ -153,7 +153,7 @@ cb_resume_success: "▶️ {position} konumunda devam ediliyor."
 cb_resume_message: |
   <b>{emoji:🎵} Şimdi Çalıyor:</b>
 
-  <b>▫ Parça:</b> <a href="{url}">{title}</a>
+  <b>▫ Parça:</b> {title}
   <b>▫ Süre:</b> {duration}
   <b>▫ Devam Ettiren:</b> {user}
 
@@ -178,7 +178,7 @@ cb_mute_success: "🔇 Sessize alındı."
 cb_mute_message: |
   <b>{emoji:🔇} Oynatma Sessize Alındı</b>
 
-  <b>▫ Parça:</b> <a href="{url}">{title}</a>
+  <b>▫ Parça:</b> {title}
   <b>▫ Sessize Alan:</b> {user}
 
 cb_unmute_success: "🔊 Ses açıldı."
@@ -332,7 +332,7 @@ logger_bot_started: |
   <b>ID:</b> {user_id}
   
 
-logger_playback_template: "<b>{emoji:🎧} Parça:</b> <a href=\"{track_url}\">{track}</a>\n<b>{emoji:🔗} Kaynak:</b> {source}\n<b>{emoji:📌} Grup:</b> {group} ({group_id})\n<b>{emoji:👤} İsteyen:</b> {requested_by} (<code>{requested_by_id}</code>)"
+logger_playback_template: "<b>{emoji:🎧} Parça:</b> {track}\n<b>{emoji:🔗} Kaynak:</b> {source}\n<b>{emoji:📌} Grup:</b> {group} ({group_id})\n<b>{emoji:👤} İsteyen:</b> {requested_by} (<code>{requested_by_id}</code>)"
 
 loop_usage: "{emoji:🔁} <b>Döngü Kontrolü</b>\n\nKullanım: {cmd} [sayı]\n• 0 - Döngüyü devre dışı bırak\n• 1-10 - Döngü sayısı\n\n<i>{count_line}</i>"
 loop_invalid: "{emoji:⚠️} <b>Geçersiz döngü sayısı.</b>\nDevre dışı bırakmak için 0, döngü sayısını ayarlamak için 1-10 arası bir değer kullan."
@@ -436,7 +436,7 @@ play_download_failed: "{emoji:❌} İndirme başarısız. Lütfen tekrar deneyin
 play_added_to_queue_single: |
   <b>{emoji:🎵} Sıraya Eklendi:</b> #{index}
 
-  <b>▫ Parça:</b> <a href="{url}">{title}</a>
+  <b>▫ Parça:</b> {title}
   <b>▫ Süre:</b> {duration}
   <b>▫ İsteyen:</b> {by}
 
@@ -758,7 +758,7 @@ stream_play_fail: "{emoji:❌} Şarkı oynatılamadı."
 stream_now_playing: |
   <b>{emoji:🎵} Şimdi Çalıyor:</b>
 
-  <b>▫ Parça:</b> <a href="{url}">{title}</a>
+  <b>▫ Parça:</b> {title}
   <b>▫ Süre:</b> {duration}
   <b>▫ İsteyen:</b> {by}
 

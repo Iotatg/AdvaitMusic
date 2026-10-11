@@ -143,7 +143,7 @@ cb_pause_success: "⏸️ تم إيقاف المقطع مؤقتاً عند {posi
 cb_pause_message: |
   <b>{emoji:⏸️} تم إيقاف المقطع مؤقتاً</b>
 
-  <b>▫ العنوان :</b> <a href="{url}">{title}</a>
+  <b>▫ العنوان :</b> {title}
   <b>▫ المدة :</b> {position} / {duration}
   <b>▫ أوقف بواسطة:</b> {user}
 
@@ -154,7 +154,7 @@ cb_resume_success: "▶️ تم الاستئناف عند {position}."
 cb_resume_message: |
   <b>{emoji:🎵} جاري التشغيل الآن:</b>
 
-  <b>▫ العنوان :</b> <a href="{url}">{title}</a>
+  <b>▫ العنوان :</b> {title}
   <b>▫ المدة:</b> {duration}
   <b>▫ استؤنف بواسطة:</b> {user}
 
@@ -179,7 +179,7 @@ cb_mute_success: "🔇 تم كتم الصوت."
 cb_mute_message: |
   <b>{emoji:🔇} تم كتم التشغيل</b>
 
-  <b>▫ المقطع:</b> <a href="{url}">{title}</a>
+  <b>▫ المقطع:</b> {title}
   <b>▫ كُتم بواسطة:</b> {user}
 
 cb_unmute_success: "🔊 تم إلغاء الكتم."
@@ -333,7 +333,7 @@ logger_bot_started: |
   <b>المعرف:</b> {user_id}
   
 
-logger_playback_template: "<b>{emoji:🎧} المقطع:</b> <a href=\"{track_url}\">{track}</a>\n<b>{emoji:🔗} المصدر:</b> {source}\n<b>{emoji:📌} المجموعة:</b> {group} ({group_id})\n<b>{emoji:👤} طلب بواسطة:</b> {requested_by} (<code>{requested_by_id}</code>)"
+logger_playback_template: "<b>{emoji:🎧} المقطع:</b> {track}\n<b>{emoji:🔗} المصدر:</b> {source}\n<b>{emoji:📌} المجموعة:</b> {group} ({group_id})\n<b>{emoji:👤} طلب بواسطة:</b> {requested_by} (<code>{requested_by_id}</code>)"
 
 loop_usage: "{emoji:🔁} <b>التحكم في التكرار</b>\n\nالاستخدام: {cmd} [العدد]\n• 0 - تعطيل التكرار\n• 1-10 - عدد مرات التكرار\n\n<i>{count_line}</i>"
 loop_invalid: "{emoji:⚠️} <b>عدد تكرار غير صالح.</b>\nاستخدم 0 للتعطيل أو 1-10 لتحديد عدد مرات التكرار."
@@ -437,7 +437,7 @@ play_download_failed: "{emoji:❌} فشل التنزيل. حاول مرة أخر
 play_added_to_queue_single: |
   <b>{emoji:🎵} تمت الإضافة لقائمة الانتظار:</b> #{index}
 
-  <b>▫ المقطع:</b> <a href="{url}">{title}</a>
+  <b>▫ المقطع:</b> {title}
   <b>▫ المدة:</b> {duration}
   <b>▫ طلب بواسطة:</b> {by}
 
@@ -761,7 +761,7 @@ stream_play_fail: "{emoji:❌} فشل تشغيل الأغنية."
 stream_now_playing: |
   <b>{emoji:🎵} جاري التشغيل الآن:</b>
 
-  <b>▫ المقطع:</b> <a href="{url}">{title}</a>
+  <b>▫ المقطع:</b> {title}
   <b>▫ المدة:</b> {duration}
   <b>▫ طلب بواسطة:</b> {by}
 

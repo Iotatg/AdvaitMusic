@@ -21,8 +21,10 @@ struct Future {
     std::mutex mu;
     std::condition_variable cv;
     bool done{false};
+    // Written directly by libntgcalls while the future references this struct;
+    // must be read only after wait_future() reports completion.
     int error{0};
-    std::string message;
+    char* message{nullptr};
 };
 
 void promise_cb(void* p) {
@@ -32,11 +34,11 @@ void promise_cb(void* p) {
     f->cv.notify_all();
 }
 
-ntg_async_struct make_future(Future* f, int* err, char** msg) {
+ntg_async_struct make_future(Future* f) {
     ntg_async_struct a{};
     a.userData = f;
-    a.errorCode = err;
-    a.errorMessage = msg;
+    a.errorCode = &f->error;
+    a.errorMessage = &f->message;
     a.promise = promise_cb;
     return a;
 }
@@ -46,12 +48,27 @@ bool wait_future(Future* f) {
     f->cv.wait_for(lk, std::chrono::seconds(30), [&] { return f->done; });
     return f->done && f->error == 0;
 }
+
+void log_cb(ntg_log_message_struct m) {
+    const char* lvl = "?";
+    switch (m.level) {
+        case NTG_LOG_DEBUG: lvl = "TRACE"; break;
+        case NTG_LOG_INFO: lvl = "DEBUG"; break;
+        case NTG_LOG_WARNING: lvl = "WARN"; break;
+        case NTG_LOG_ERROR: lvl = "ERROR"; break;
+        default: break;
+    }
+    ADVAIT_LOG_INFO("ntgcore", std::string(lvl) + " [" + (m.file ? m.file : "") + ":" + std::to_string(m.line) + "] " +
+                                     (m.message ? m.message : ""));
+}
 }  // namespace
 #endif
 
 Client::Client() {
 #ifdef ADVAIT_WITH_NTGCALLS
+    ntg_register_logger(log_cb);
     ptr_ = ntg_init();
+
     ADVAIT_LOG_INFO("ntgcalls", "ntg_init ptr=" + std::to_string(ptr_));
 #else
     ADVAIT_LOG_WARN("ntgcalls", "built without libntgcalls; playback is a no-op");
@@ -72,16 +89,18 @@ void Client::close() {
 bool Client::create(int64_t chat_id, std::string* sdp) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
     char* buf = nullptr;
-    ntg_create(ptr_, chat_id, &buf, make_future(&f, &err, &msg));
-    f.error = err;
-    if (!wait_future(&f)) {
-        ADVAIT_LOG_ERROR("ntgcalls", std::string("create failed: ") + (msg ? msg : ""));
+    int sync = ntg_create(ptr_, chat_id, &buf, make_future(&f));
+    if (sync != 0 || !wait_future(&f)) {
+        std::ostringstream os;
+        os << "create failed sync=" << sync << " err=" << f.error << " msg=" << (f.message ? f.message : "");
+        ADVAIT_LOG_ERROR("ntgcalls", os.str());
         return false;
     }
-    if (sdp && buf) *sdp = buf;
+    if (sdp && buf) {
+        *sdp = buf;
+        std::free(buf);
+    }
     return true;
 #else
     (void)chat_id;
@@ -93,10 +112,7 @@ bool Client::create(int64_t chat_id, std::string* sdp) {
 bool Client::connect(int64_t chat_id, const std::string& params) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_connect(ptr_, chat_id, const_cast<char*>(params.c_str()), false, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_connect(ptr_, chat_id, const_cast<char*>(params.c_str()), false, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -126,10 +142,7 @@ bool Client::set_stream_sources(int64_t chat_id, const MediaDescription& desc) {
         d.camera = &cam;
     }
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_set_stream_sources(ptr_, chat_id, NTG_STREAM_CAPTURE, d, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_set_stream_sources(ptr_, chat_id, NTG_STREAM_CAPTURE, d, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -141,10 +154,7 @@ bool Client::set_stream_sources(int64_t chat_id, const MediaDescription& desc) {
 bool Client::pause(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_pause(ptr_, chat_id, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_pause(ptr_, chat_id, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -155,10 +165,7 @@ bool Client::pause(int64_t chat_id) {
 bool Client::resume(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_resume(ptr_, chat_id, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_resume(ptr_, chat_id, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -169,10 +176,7 @@ bool Client::resume(int64_t chat_id) {
 bool Client::mute(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_mute(ptr_, chat_id, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_mute(ptr_, chat_id, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -183,10 +187,7 @@ bool Client::mute(int64_t chat_id) {
 bool Client::unmute(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_unmute(ptr_, chat_id, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_unmute(ptr_, chat_id, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -197,10 +198,7 @@ bool Client::unmute(int64_t chat_id) {
 bool Client::stop(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
-    ntg_stop(ptr_, chat_id, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_stop(ptr_, chat_id, make_future(&f));
     return wait_future(&f);
 #else
     (void)chat_id;
@@ -211,11 +209,8 @@ bool Client::stop(int64_t chat_id) {
 int64_t Client::time(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
-    int err = 0;
-    char* msg = nullptr;
     int64_t t = 0;
-    ntg_time(ptr_, chat_id, NTG_STREAM_CAPTURE, &t, make_future(&f, &err, &msg));
-    f.error = err;
+    ntg_time(ptr_, chat_id, NTG_STREAM_CAPTURE, &t, make_future(&f));
     wait_future(&f);
     return t;
 #else
