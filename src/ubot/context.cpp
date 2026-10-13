@@ -17,6 +17,7 @@ bool Context::connected(int64_t chat_id) const {
 // GetInputGroupCall -> PhoneJoinGroupCall -> Connect(serverParams).
 bool Context::join_locked(int64_t chat_id, const ntg::MediaDescription& desc, std::string* err) {
     Mounted& m = calls_[chat_id];
+    ADVAIT_LOG_INFO("ubot", "join step 1: webrtc create chat=" + std::to_string(chat_id));
     std::string offer;
     if (!binding_->create(chat_id, &offer)) {
         binding_->stop(chat_id);
@@ -25,6 +26,7 @@ bool Context::join_locked(int64_t chat_id, const ntg::MediaDescription& desc, st
         }
         return false;
     }
+    ADVAIT_LOG_INFO("ubot", "join step 2: set_stream sources");
     if (!binding_->set_stream_sources(chat_id, desc)) {
         binding_->stop(chat_id);
         if (err) {
@@ -32,19 +34,35 @@ bool Context::join_locked(int64_t chat_id, const ntg::MediaDescription& desc, st
         }
         return false;
     }
+    ADVAIT_LOG_INFO("ubot", "join step 3: get_group_call");
     if (!mt_->get_group_call(chat_id, &m.call, err)) {
+        ADVAIT_LOG_WARN("ubot", "get_group_call failed chat=" + std::to_string(chat_id) + ": " +
+                                    (err ? *err : "?"));
         binding_->stop(chat_id);
         return false;
     }
+    ADVAIT_LOG_INFO("ubot", "join step 4: phone.joinGroupCall id=" + std::to_string(m.call.id));
     std::string server;
     if (!mt_->join_group_call(m.call, offer, &server, err)) {
+        ADVAIT_LOG_WARN("ubot", "join_group_call failed chat=" + std::to_string(chat_id) + ": " +
+                                    (err ? *err : "?"));
         binding_->stop(chat_id);
         return false;
     }
+    ADVAIT_LOG_INFO("ubot", "join step 5: webrtc connect");
     if (!binding_->connect(chat_id, server)) {
         binding_->stop(chat_id);
         if (err) {
             *err = "webrtc connect failed";
+        }
+        return false;
+    }
+    // ubot.connect_call waits on the connection callback; without this a failed
+    // WebRTC handshake looks like success and the user hears nothing.
+    if (!binding_->wait_connected(chat_id, 20000)) {
+        binding_->stop(chat_id);
+        if (err) {
+            *err = "webrtc connection " + binding_->connection_state(chat_id);
         }
         return false;
     }
@@ -54,14 +72,21 @@ bool Context::join_locked(int64_t chat_id, const ntg::MediaDescription& desc, st
 }
 
 bool Context::play(int64_t chat_id, const ntg::MediaDescription& desc, std::string* err) {
-    if (!binding_ || !mt_) {
+    if (!binding_) {
+        if (err) *err = "voice engine not initialized";
+        return false;
+    }
+    if (!mt_) {
+        if (err) {
+            *err = "assistant session unavailable (STRING_SESSION failed to parse or was not set)";
+        }
         return false;
     }
     std::lock_guard<std::mutex> g(mu_);
     std::string cerr;
     if (!mt_->connect(&cerr)) {
         if (err) {
-            *err = "mtproto: " + cerr;
+            *err = cerr.empty() ? "mtproto connect failed" : "mtproto: " + cerr;
         }
         return false;
     }

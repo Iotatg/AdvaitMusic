@@ -1,4 +1,5 @@
 #include "advait/modules/modules.hpp"
+#include "advait/modules/chat_state.hpp"
 #include "advait/modules/common.hpp"
 #include "advait/core/assistant.hpp"
 #include "advait/core/buttons.hpp"
@@ -48,6 +49,78 @@ std::string extract_query(const std::string& text) {
     auto sp = text.find(' ');
     if (sp == std::string::npos) return {};
     return utils::trim(text.substr(sp + 1));
+}
+
+bool contains(const std::string& hay, const std::string& needle) {
+    return hay.find(needle) != std::string::npos;
+}
+
+// Flood-wait seconds as reported by Telegram, or 0 when not a flood wait.
+int flood_wait_seconds(const std::string& err) {
+    auto p = err.find("FLOOD_WAIT_");
+    if (p == std::string::npos) return 0;
+    int wait = 0;
+    try {
+        wait = std::stoi(err.substr(p + 11));
+    } catch (...) {
+        return 0;
+    }
+    return wait > 0 ? wait : 0;
+}
+
+std::string flood_wait_text(int64_t chat_id, int wait) {
+    if (wait >= 60) {
+        int minutes = wait / 60;
+        return F(chat_id, "flood_minutes", {{"duration", std::to_string(minutes)}});
+    }
+    return F(chat_id, "flood_seconds", {{"duration", std::to_string(wait)}});
+}
+
+enum class PlayErrorAction { Retry, Stop };
+
+// Mirrors the Go binding's handlePlayAttemptError: classify the failure so the
+// user gets the specific message instead of a raw error dump.
+PlayErrorAction handle_play_attempt_error(const std::string& err, int attempt, int64_t chat_id,
+                                         const std::string& raw, LiveMsg& lm) {
+    if (int wait = flood_wait_seconds(err); wait > 0) {
+        ADVAIT_LOG_WARN("play", "FloodWait detected (" + std::to_string(wait) +
+                                   "s). Retrying... (attempt " + std::to_string(attempt) + ")");
+        lm.eor(flood_wait_text(chat_id, wait));
+        std::this_thread::sleep_for(std::chrono::seconds(wait));
+        return PlayErrorAction::Retry;
+    }
+    if (contains(err, "connection timeout") || contains(err, "no response from ntgcalls") ||
+        contains(err, "timed out")) {
+        ADVAIT_LOG_ERROR("play", "Voice connection timeout. Stopping call session...");
+        lm.eor(F(chat_id, "err_connection_timeout"));
+        drop_room(chat_id);
+        return PlayErrorAction::Stop;
+    }
+    if (contains(err, "Streaming is not supported when using RTMP")) {
+        ADVAIT_LOG_ERROR("play", "RTMP/live-stream voice chat detected, cannot play. Cleaning up...");
+        drop_room(chat_id);
+        lm.eor(F(chat_id, "rtmp_play_unsupported"));
+        return PlayErrorAction::Stop;
+    }
+    if (contains(err, "group call") && contains(err, "is closed")) {
+        ADVAIT_LOG_ERROR("play", "No active voice chat: " + err);
+        lm.eor(F(chat_id, "err_no_active_voicechat"));
+        return PlayErrorAction::Stop;
+    }
+    if (contains(err, "GROUPCALL_INVALID")) {
+        ADVAIT_LOG_ERROR("play", "GROUPCALL_INVALID err occurred. Returning...");
+        drop_room(chat_id);
+        lm.eor(F(chat_id, "play_unable"));
+        return PlayErrorAction::Stop;
+    }
+    if (contains(err, "INTERDC_X_CALL_ERROR")) {
+        ADVAIT_LOG_WARN("play", "INTERDC_X_CALL_ERROR occurred. Retrying... (attempt " +
+                                   std::to_string(attempt) + ")");
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        return PlayErrorAction::Retry;
+    }
+    (void)raw;
+    return PlayErrorAction::Retry;
 }
 
 bool track_in_queue(RoomState* r, const Track& t) {
@@ -127,8 +200,19 @@ void handle_play(const tg::Message& m, bool force, bool cplay, bool video) {
                     : F(chat_id, "searching_query", {{"query", utils::escape_html(query)}}));
 
     auto tracks = platforms::resolve_query(query, video);
+    ADVAIT_LOG_INFO("play", "resolve done: " + std::to_string(tracks.size()) + " track(s)");
     if (tracks.empty()) {
         lm.eor(F(chat_id, "no_song_found"));
+        return;
+    }
+
+    // KanhaMusic fetchTracksAndCheckStatus order: after tracks resolve, make
+    // sure the assistant is actually a chat member (auto-join / ban / admin
+    // errors surface here) before anything is queued.
+    auto guard_err = chat_state::ensure_voice_chat_ready(r, chat_id);
+    ADVAIT_LOG_INFO("play", std::string("guard done: err=") + (guard_err.empty() ? "none" : guard_err));
+    if (!guard_err.empty()) {
+        lm.eor(guard_err);
         return;
     }
 
@@ -193,8 +277,10 @@ void handle_play(const tg::Message& m, bool force, bool cplay, bool video) {
         nlohmann::json dl_markup = {};
         if (first.duration > 600) dl_markup = cancel_keyboard(chat_id);
         lm.eor(F(chat_id, "play_downloading_song", {{"title", title}}), dl_markup);
+        ADVAIT_LOG_INFO("play", "download start: " + first.title);
         std::string dl_err;
         path = download_with_status(lm, m.chat_id, first, &dl_err, dl_markup);
+        ADVAIT_LOG_INFO("play", "download done: path=" + std::to_string(path.size()) + " err=" + dl_err);
         if (dl_err == "canceled") {
             lm.eor(F(chat_id, "play_download_canceled", {{"user", mention}}));
             return;
@@ -209,12 +295,31 @@ void handle_play(const tg::Message& m, bool force, bool cplay, bool video) {
     }
 
     bool played = false;
+    std::string play_err;
     for (int attempt = 1; attempt <= 3 && !played; ++attempt) {
-        played = r->play(first, was_downloaded ? path : std::string{}, force);
-        if (!played && attempt < 3) std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        if (r->destroyed()) {
+            ADVAIT_LOG_INFO("play", "Room destroyed during retry, aborting");
+            return;
+        }
+        play_err.clear();
+        played = r->play(first, was_downloaded ? path : std::string{}, force, &play_err);
+        if (played) {
+            if (attempt > 1) {
+                ADVAIT_LOG_INFO("play", "Successfully played after retry attempt " +
+                                           std::to_string(attempt));
+            }
+            break;
+        }
+        if (handle_play_attempt_error(play_err, attempt, chat_id, play_err, lm) ==
+            PlayErrorAction::Stop) {
+            return;
+        }
     }
     if (!played) {
-        lm.eor(F(chat_id, "play_failed", {{"error", "native play"}}));
+        // Nothing matched or retries ran out: report the underlying reason.
+        std::string why = play_err.empty() ? "playback failed" : play_err;
+        ADVAIT_LOG_ERROR("play", "❌ Failed to play after 3 attempts. Error: " + why);
+        lm.eor(F(chat_id, "play_failed", {{"error", why}}));
         return;
     }
 
@@ -234,7 +339,8 @@ void handle_play(const tg::Message& m, bool force, bool cplay, bool video) {
         return;
     }
 
-    r->play(first, {}, false);
+    // `first` was already queued by the retry loop above when something was
+    // playing; queueing it again here would add the same song twice.
     if (kept.size() == 1) {
         auto text = F(chat_id, "play_added_to_queue_single",
                       {{"index", std::to_string(r->queue().size())},
@@ -242,7 +348,8 @@ void handle_play(const tg::Message& m, bool force, bool cplay, bool video) {
                        {"title", utils::escape_html(utils::short_title(first.title, 25))},
                        {"duration", utils::format_duration(first.duration)},
                        {"by", mention}});
-        show_track(lm, chat_id, r, first, text, true);
+        // Queued reply only: edit the /play message, never the now-playing card.
+        show_track_queued(lm, chat_id, r, text);
         return;
     }
     for (size_t i = 1; i < kept.size(); ++i) {

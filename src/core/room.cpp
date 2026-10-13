@@ -166,46 +166,60 @@ void RoomState::add_played_locked(const Track& t) {
     }
 }
 
-bool RoomState::play_native() {
-    if (!assistant || !assistant->ntg) return false;
-    auto desc = ntg::media_from_file(file_path_, position_, speed_, track_ && track_->video);
-    std::string err;
-    if (!assistant->ntg->play(id, desc, &err)) {
-        ADVAIT_LOG_WARN("room", "play_native failed for " + std::to_string(id) + ": " + err);
-        return false;
-    }
-    return true;
-}
+ bool RoomState::play_native(std::string* err) {
+     if (!assistant || !assistant->ntg) {
+         if (err) *err = "no assistant configured for this chat (check STRING_SESSIONS)";
+         return false;
+     }
+     auto desc = ntg::media_from_file(file_path_, position_, speed_, track_ && track_->video);
+     std::string native_err;
+     if (!assistant->ntg->play(id, desc, &native_err)) {
+         if (err) *err = native_err.empty() ? "voice engine refused the stream" : native_err;
+         ADVAIT_LOG_WARN("room", "play_native failed for " + std::to_string(id) + ": " + *err);
+         return false;
+     }
+     return true;
+ }
 
-bool RoomState::play(const Track& t, const std::string& path, bool force) {
-    if (destroyed()) return false;
-    {
-        std::lock_guard<std::mutex> g(mu_);
-        if (!force && playing_ && track_) {
-            queue_.push_back(t);
-            return true;
-        }
-        if (!track_ || track_->id != t.id) loop_ = 0;
-        track_ = t;
-        add_played_locked(t);
-        playing_ = true;
-        file_path_ = path;
-        position_ = 0;
-        paused_ = false;
-        muted_ = false;
-        updated_at_ = std::chrono::duration_cast<std::chrono::seconds>(
-                          std::chrono::system_clock::now().time_since_epoch())
-                          .count();
-    }
-    if (!path.empty() && !play_native()) {
-        std::lock_guard<std::mutex> g(mu_);
-        track_.reset();
-        playing_ = false;
-        file_path_.clear();
-        return false;
-    }
-    return true;
-}
+ bool RoomState::play(const Track& t, const std::string& path, bool force, std::string* err) {
+     if (destroyed()) {
+         if (err) *err = "room already destroyed";
+         return false;
+     }
+     {
+         std::lock_guard<std::mutex> g(mu_);
+         if (!force && playing_ && track_) {
+             queue_.push_back(t);
+             return true;
+         }
+         if (!track_ || track_->id != t.id) loop_ = 0;
+         track_ = t;
+         add_played_locked(t);
+         playing_ = true;
+         file_path_ = path;
+         position_ = 0;
+         paused_ = false;
+         muted_ = false;
+         updated_at_ = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+     }
+     if (path.empty()) {
+         // No local file: keep the request queued so the monitor downloads and
+         // starts it, instead of reporting success while nothing streams.
+         std::lock_guard<std::mutex> g(mu_);
+         queue_.push_back(t);
+         return true;
+     }
+     if (!play_native(err)) {
+         std::lock_guard<std::mutex> g(mu_);
+         track_.reset();
+         playing_ = false;
+         file_path_.clear();
+         return false;
+     }
+     return true;
+ }
 
 bool RoomState::pause() {
     if (destroyed()) return false;
@@ -360,7 +374,16 @@ bool RoomState::unmute() {
 RoomState* create_room(int64_t chat_id, Assistant* ass) {
     std::lock_guard<std::mutex> g(rooms_mu);
     auto it = rooms.find(chat_id);
-    if (it != rooms.end()) return it->second.get();
+    if (it != rooms.end()) {
+        // A room created before an assistant was available (or bound to a
+        // different one) keeps its null/old assistant and can never stream
+        // again; refresh it when we now have one.
+        if (ass && it->second->assistant != ass) {
+            it->second->assistant = ass;
+            ADVAIT_LOG_INFO("room", "reassigned assistant for chat " + std::to_string(chat_id));
+        }
+        return it->second.get();
+    }
     auto r = std::make_unique<RoomState>();
     r->id = chat_id;
     r->chat_id = chat_id;

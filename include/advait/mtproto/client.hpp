@@ -4,6 +4,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "advait/mtproto/tl.hpp"
 
@@ -75,9 +76,19 @@ public:
     bool get_group_call(int64_t channel_id, GroupCallRef* out, std::string* err);
     // Access hash of our own account (users.getUsers(inputUserSelf)), cached after first call.
     bool self_access_hash(int64_t* out, std::string* err);
+    // Our own user id (same RPC as self_access_hash; both share one cached fetch).
+    // Backfills session_.user_id when the session string carried no user id.
+    bool self_user_id(int64_t* out, std::string* err);
     // Join an active group call; on success *server_params receives updateGroupCallConnection params JSON.
     bool join_group_call(const GroupCallRef&, const std::string& params_json, std::string* server_params,
                          std::string* err);
+
+    // ---- channel membership (assistant auto-join, ChatState parity) ----
+    // USER_ALREADY_PARTICIPANT is treated as success. Error text follows the
+    // call_rpc convention "telegram_error:<code>:<NAME>" (e.g. INVITE_REQUEST_SENT).
+    bool join_channel_by_id(int64_t channel_id, int64_t access_hash, std::string* err);
+    bool join_channel_by_username(const std::string& username, std::string* err);
+    bool join_channel_by_invite(const std::string& hash, std::string* err);
 
     const Session& session() const { return session_; }
 
@@ -97,7 +108,11 @@ private:
     bool expect_pong_{false};
     bool rpc_ready_{false};
     bool init_active_{false};
+    // Shared fetch behind self_access_hash/self_user_id.
+    bool fetch_self_user(int64_t* out_id, int64_t* out_ah, std::string* err);
+
     int64_t self_ah_{0};
+    int64_t self_id_{0};
     std::mutex send_mu_;
     std::mutex updates_mu_;
     std::function<void(const UpdateEvent&)> update_handler_;
@@ -118,6 +133,14 @@ private:
     bool resolve_channel(int64_t chat_id, int64_t* channel_out, int64_t* ah, std::string* err);
     void dispatch_update(const std::string& obj);
     bool wait_socket_readable(int timeout_ms);
+
+    // Telegram withholds stateful method answers (e.g. channels.getFullChannel)
+    // until the client acks incoming messages; pyrogram/gogram send
+    // msgs_ack for every consumed message id.
+    void queue_ack(int64_t msg_id);
+    void flush_acks();
+    std::mutex acks_mu_;
+    std::vector<int64_t> pending_acks_;
 };
 
 }  // namespace advait::mtproto

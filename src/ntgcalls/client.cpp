@@ -69,6 +69,42 @@ Client::Client() {
     ntg_register_logger(log_cb);
     ptr_ = ntg_init();
 
+    ntg_on_connection_change(
+        ptr_,
+        [](uintptr_t, int64_t chat, ntg_network_info_struct info, void* ud) {
+            auto* self = static_cast<Client*>(ud);
+            bool settled = true;
+            bool connected = false;
+            std::string state;
+            switch (info.state) {
+                case NTG_STATE_CONNECTING: state = "connecting"; settled = false; break;
+                case NTG_STATE_CONNECTED: state = "connected"; connected = true; break;
+                case NTG_STATE_TIMEOUT: state = "timeout"; break;
+                case NTG_STATE_FAILED: state = "failed"; break;
+                case NTG_STATE_CLOSED: state = "closed"; break;
+                default: state = "unknown"; break;
+            }
+            std::vector<ConnectionChangeCallback> cbs;
+            {
+                std::lock_guard<std::mutex> g(self->mu_);
+                ConnectionInfo ci;
+                ci.settled = settled;
+                ci.connected = connected;
+                ci.state = state;
+                self->connection_[chat] = ci;
+                cbs = self->connection_change_;
+            }
+            if (connected) {
+                ADVAIT_LOG_INFO("ntgcalls", "webrtc connected for chat " + std::to_string(chat));
+            } else if (settled) {
+                ADVAIT_LOG_WARN("ntgcalls", "webrtc connection " + state + " for chat " +
+                                                 std::to_string(chat));
+            }
+            for (auto& c : cbs) c(chat, connected, state);
+            self->connection_cv_.notify_all();
+        },
+        this);
+
     ADVAIT_LOG_INFO("ntgcalls", "ntg_init ptr=" + std::to_string(ptr_));
 #else
     ADVAIT_LOG_WARN("ntgcalls", "built without libntgcalls; playback is a no-op");
@@ -78,6 +114,10 @@ Client::Client() {
 Client::~Client() { close(); }
 
 void Client::close() {
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        connection_.clear();
+    }
 #ifdef ADVAIT_WITH_NTGCALLS
     if (ptr_) {
         ntg_destroy(ptr_);
@@ -199,7 +239,13 @@ bool Client::stop(int64_t chat_id) {
 #ifdef ADVAIT_WITH_NTGCALLS
     Future f;
     ntg_stop(ptr_, chat_id, make_future(&f));
-    return wait_future(&f);
+    bool ok = wait_future(&f);
+    {
+        // Drop any reported state so a later reconnect is judged on fresh events.
+        std::lock_guard<std::mutex> g(mu_);
+        connection_.erase(chat_id);
+    }
+    return ok;
 #else
     (void)chat_id;
     return true;
@@ -229,13 +275,42 @@ void Client::on_stream_end(StreamEndCallback cb) {
             auto* self = static_cast<Client*>(ud);
             std::vector<StreamEndCallback> cbs;
             {
-                std::lock_guard<std::mutex> g(self->mu_);
+                std::lock_guard<std::mutex> lg(self->mu_);
                 cbs = self->stream_end_;
             }
             for (auto& c : cbs) c(chat);
         },
         this);
 #endif
+}
+
+void Client::on_connection_change(ConnectionChangeCallback cb) {
+    std::lock_guard<std::mutex> g(mu_);
+    connection_change_.push_back(std::move(cb));
+}
+
+bool Client::wait_connected(int64_t chat_id, int timeout_ms) {
+#ifdef ADVAIT_WITH_NTGCALLS
+    std::unique_lock<std::mutex> lk(mu_);
+    connection_cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&] {
+        auto it = connection_.find(chat_id);
+        return it != connection_.end() && it->second.settled;
+    });
+    auto it = connection_.find(chat_id);
+    // No event at all means the engine does not emit connection changes here;
+    // treat that as "nothing to report" so playback is never blocked by it.
+    return it == connection_.end() || it->second.connected;
+#else
+    (void)chat_id;
+    (void)timeout_ms;
+    return true;
+#endif
+}
+
+std::string Client::connection_state(int64_t chat_id) {
+    std::lock_guard<std::mutex> g(mu_);
+    auto it = connection_.find(chat_id);
+    return it == connection_.end() ? std::string("no event") : it->second.state;
 }
 
 MediaDescription media_from_file(const std::string& path, int pos, double speed, bool video) {

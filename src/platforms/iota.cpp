@@ -135,8 +135,13 @@ std::vector<Track> iota_similar(const std::string& media_id, int limit) {
     if (rc != CURLE_OK || st >= 400) return {};
     try {
         auto j = nlohmann::json::parse(body);
+        if (!j.is_object()) {
+            ADVAIT_LOG_WARN("iota", "search: non-object response (type=" + std::string(j.type_name()) + ")");
+            return {};
+        }
         std::vector<Track> out;
         for (auto& item : j.value("results", nlohmann::json::array())) {
+            if (!item.is_object()) continue;
             Track t;
             t.id = item.value("media_id", "");
             if (t.id.empty()) continue;
@@ -150,6 +155,7 @@ std::vector<Track> iota_similar(const std::string& media_id, int limit) {
         }
         return out;
     } catch (...) {
+        ADVAIT_LOG_WARN("iota", "search: parse failed for body prefix: " + body.substr(0, 120));
         return {};
     }
 }

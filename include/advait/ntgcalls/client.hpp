@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -30,6 +32,16 @@ struct MediaDescription {
 
 using StreamEndCallback = std::function<void(int64_t chat_id)>;
 
+// connected is true only when the engine reported NTG_STATE_CONNECTED.
+// state is one of connecting/connected/timeout/failed/closed.
+using ConnectionChangeCallback = std::function<void(int64_t chat_id, bool connected, const std::string& state)>;
+
+struct ConnectionInfo {
+    bool settled{false};
+    bool connected{false};
+    std::string state;
+};
+
 class Client {
 public:
     Client();
@@ -47,6 +59,12 @@ public:
     bool stop(int64_t chat_id);
     int64_t time(int64_t chat_id);
     void on_stream_end(StreamEndCallback cb);
+    void on_connection_change(ConnectionChangeCallback cb);
+    // Waits until the engine reports a terminal connection state for chat_id.
+    // Returns false only when a failure/timeout was actually reported; if the
+    // engine never emits any event the wait just times out and returns true.
+    bool wait_connected(int64_t chat_id, int timeout_ms = 20000);
+    std::string connection_state(int64_t chat_id);
     void close();
     uintptr_t ptr() const { return ptr_; }
 
@@ -54,6 +72,9 @@ private:
     uintptr_t ptr_{0};
     std::mutex mu_;
     std::vector<StreamEndCallback> stream_end_;
+    std::vector<ConnectionChangeCallback> connection_change_;
+    std::map<int64_t, ConnectionInfo> connection_;
+    std::condition_variable connection_cv_;
 };
 
 MediaDescription media_from_file(const std::string& path, int pos, double speed, bool video);

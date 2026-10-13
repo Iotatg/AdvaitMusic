@@ -187,31 +187,29 @@ inline void show_track(LiveMsg& lm, int64_t chat_id, RoomState* r, const Track& 
     }
 }
 
-// Downloads the track while editing `lm` into a live progress message.
+// Mirrors Go helpers.go finalizePlayReply's single-queue branch: a queued reply
+// edits the live /play message in place and leaves the room's now-playing card
+// alone. Using show_track() here would publish a new card and delete the
+// now-playing one, so the song actually playing would disappear from the chat.
+inline void show_track_queued(LiveMsg& lm, int64_t chat_id, RoomState* r,
+                              const std::string& text) {
+    lm.eor(text, play_markup(chat_id, r, true));
+}
+
+// Downloads the track. KanhaMusic parity: iota downloads show a single static
+// message (the caller edits it into lm before calling us) with no progress
+// updates — the remote API never sends Content-Length, so a live percentage
+// just sits at 0.0%. The cancel flag stays wired so /cancel still aborts.
 // Returns the file path, "" on failure/cancel (*err == "canceled" for cancels).
 inline std::string download_with_status(LiveMsg& lm, int64_t chat_id, const Track& t, std::string* err,
                                         const nlohmann::json& markup = {}) {
+    (void)lm;
+    (void)markup;
     platforms::DownloadHooks hooks;
     {
         std::lock_guard<std::mutex> g(dl_mu());
         dl_map()[chat_id] = &hooks.cancel;
     }
-    using clock = std::chrono::steady_clock;
-    auto last_edit = clock::now() - std::chrono::seconds(10);
-    hooks.progress = [&](double pct, double speed, long eta, double elapsed) {
-        auto now = clock::now();
-        bool done = pct >= 99.9;
-        if (!done && now - last_edit < std::chrono::seconds(2)) return;
-        last_edit = now;
-        char buf[32];
-        snprintf(buf, sizeof(buf), "%.1f", pct);
-        lm.eor(F(chat_id, "download_progress",
-                 {{"percentage", std::string(buf)},
-                  {"speed", utils::format_bytes(static_cast<int64_t>(speed)) + "/s"},
-                  {"eta", utils::format_duration(static_cast<int>(eta))},
-                  {"elapsed", utils::format_time(static_cast<int>(elapsed))}}),
-               markup);
-    };
     auto path = platforms::download_track(t, err, &hooks);
     {
         std::lock_guard<std::mutex> g(dl_mu());

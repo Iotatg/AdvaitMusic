@@ -171,6 +171,10 @@ add_library(advait_modules STATIC
     src/modules/help.cpp
     src/modules/help_texts.cpp
     src/modules/play.cpp
+    src/modules/chat_state.cpp
+    src/modules/group_admin.cpp
+    src/modules/moderation.cpp
+    src/modules/sticker.cpp
     src/modules/skip.cpp
     src/modules/pause.cpp
     src/modules/queue.cpp

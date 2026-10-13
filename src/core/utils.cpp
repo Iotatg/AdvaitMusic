@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
+#include <unordered_map>
 
 namespace advait::utils {
 
@@ -160,6 +161,76 @@ std::string html_mention(const std::string& name, int64_t id) {
 }
 
 std::string mention(const std::string& name, int64_t id) { return html_mention(name, id); }
+
+// Ports Aishamusic-2 core.Stylish: smallcaps font for ASCII letters, leaving
+// HTML tags (<...>) and entities (&...;) untouched.
+std::string stylish(const std::string& in) {
+    if (in.empty()) return in;
+    static const std::unordered_map<uint32_t, std::string> kMap = [] {
+        const std::string lower[] = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                                     "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"};
+        const char* mapped[] = {"ᴀ", "ʙ", "ᴄ", "ᴅ", "є", "ғ", "ɢ", "ʜ", "ɪ", "ᴊ", "ᴋ", "ʟ", "ϻ",
+                                "η", "σ", "ᴘ", "ǫ", "ʀ", "s", "ᴛ", "υ", "ᴠ", "ᴡ", "x", "ʏ", "ᴢ"};
+        std::unordered_map<uint32_t, std::string> m;
+        for (int i = 0; i < 26; i++) {
+            m[static_cast<uint32_t>('A' + i)] = mapped[i];
+            m[static_cast<uint32_t>('a' + i)] = mapped[i];
+        }
+        return m;
+    }();
+
+    // Decode UTF-8 into code points (cheap: we only re-encode what we replace).
+    std::string out;
+    out.reserve(in.size() + in.size() / 2);
+    auto it = in.begin();
+    auto last = in.end();
+    while (it != last) {
+        unsigned char c = static_cast<unsigned char>(*it);
+        if (c == '<') {
+            // Copy the tag verbatim.
+            auto j = it;
+            while (j != last && *j != '>') ++j;
+            if (j == last) {
+                out.append(it, last);
+                break;
+            }
+            out.append(it, j + 1);
+            it = j + 1;
+            continue;
+        }
+        if (c == '&') {
+            auto j = it;
+            while (j != last && *j != ';') ++j;
+            if (j == last) {
+                out.push_back(*it++);
+                continue;
+            }
+            out.append(it, j + 1);
+            it = j + 1;
+            continue;
+        }
+        if (c < 0x80) {
+            auto found = kMap.find(c);
+            if (found != kMap.end()) {
+                out += found->second;
+            } else {
+                out.push_back(static_cast<char>(c));
+            }
+            ++it;
+            continue;
+        }
+        // Multi-byte sequence: pass through.
+        out.push_back(*it++);
+        if (c >= 0xC0 && c < 0xE0) {
+            if (it != last) out.push_back(*it++);
+        } else if (c >= 0xE0 && c < 0xF0) {
+            for (int k = 0; k < 2 && it != last; k++) out.push_back(*it++);
+        } else if (c >= 0xF0 && c < 0xF8) {
+            for (int k = 0; k < 3 && it != last; k++) out.push_back(*it++);
+        }
+    }
+    return out;
+}
 
 namespace {
 const char* kB64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

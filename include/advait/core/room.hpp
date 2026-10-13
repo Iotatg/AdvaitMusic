@@ -25,7 +25,7 @@ public:
     std::atomic<int64_t> status_msg{0};
     std::atomic<bool> status_photo{false};
 
-    bool play(const Track& t, const std::string& path, bool force = false);
+    bool play(const Track& t, const std::string& path, bool force = false, std::string* err = nullptr);
     bool pause();
     bool resume();
     bool replay();
@@ -74,7 +74,7 @@ private:
     std::string engine_token_;
     std::atomic<bool> destroyed_{false};
 
-    bool play_native();
+    bool play_native(std::string* err = nullptr);
     void update_position();
     void add_played_locked(const Track& t);
 };

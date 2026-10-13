@@ -18,6 +18,7 @@
 
 #include "advait/mtproto/client.hpp"
 #include "advait/mtproto/tl.hpp"
+#include "advait/core/logger.hpp"
 
 // Object CRCs (verified against gogram @ e3d2247 / telegram layer 229)
 #define CRC_PING 0x7abe77ecu
@@ -44,7 +45,7 @@ namespace advait::mtproto {
 
 namespace {
 
-constexpr int kLayer = 227;  // gogram v1.7.71 ApiVersion: matches schemes/api.tl used for all CRCs
+constexpr int kLayer = 229;  // gogram v1.7.71 ApiVersion: matches schemes/api.tl used for all CRCs
 
 std::string sha256_of(std::initializer_list<std::string> parts) {
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
@@ -184,7 +185,7 @@ Client::Client(Session session, ClientConfig cfg) : session_(std::move(session))
 
 Client::~Client() { disconnect(); }
 
-bool Client::socket_connect(std::string* err) {
+ bool Client::socket_connect(std::string* err) {
     addrinfo hints{};
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -395,6 +396,29 @@ void Client::dispatch_update(const std::string& obj) {
 }
 
 // message_container children are plaintext messages: msg_id(8) seqno(4) body_len(4) body.
+void Client::queue_ack(int64_t msg_id) {
+    if (msg_id == 0) return;
+    std::lock_guard<std::mutex> g(acks_mu_);
+    // Bound growth: only pending messages this thread read are tracked.
+    if (pending_acks_.size() < 512) pending_acks_.push_back(msg_id);
+}
+
+void Client::flush_acks() {
+    std::vector<int64_t> ids;
+    {
+        std::lock_guard<std::mutex> g(acks_mu_);
+        if (pending_acks_.empty() || fd_ < 0) return;
+        ids.swap(pending_acks_);
+    }
+    TlWriter w;
+    w.u32(0x62d6b459u);  // msgs_ack
+    w.u32(0x1cb5c415u);  // vector<long>
+    w.i32(static_cast<int32_t>(ids.size()));
+    for (int64_t id : ids) w.i64(id);
+    std::string enc = encrypt_body(w.out(), nullptr, false);
+    if (!enc.empty()) write_msg(enc);
+}
+
 bool Client::handle_plaintext(const std::string& body, int64_t req_id, std::string* out_result, bool* matched) {
     *matched = false;
     if (body.size() < 4) return true;
@@ -602,6 +626,7 @@ std::string Client::call_rpc(const std::string& serialized_request, std::string*
         if (!write_msg(enc)) return fail("mtproto: send failed");
 
         int64_t deadline = mono_ms() + 25000;
+        int unmatched = 0;
         while (mono_ms() < deadline) {
             std::string msg;
             if (!read_msg(&msg)) {
@@ -621,11 +646,16 @@ std::string Client::call_rpc(const std::string& serialized_request, std::string*
             }
             std::string body;
             int64_t mid = 0;
-            if (!decrypt_message(msg, &body, &mid)) continue;
+            bool dec = decrypt_message(msg, &body, &mid);
+            if (!dec) continue;
+            if (mid != 0) queue_ack(mid);
             if (match_pong && body.size() >= 12) {
                 TlReader pr(body);
                 uint32_t pcrc = pr.u32();
-                if (pcrc == CRC_PONG || pcrc == CRC_HIGH_PONG) return body;
+                if (pcrc == CRC_PONG || pcrc == CRC_HIGH_PONG) {
+                    flush_acks();
+                    return body;
+                }
             }
             bool matched = false;
             std::string result;
@@ -641,13 +671,18 @@ std::string Client::call_rpc(const std::string& serialized_request, std::string*
                 if (!write_msg(enc)) return fail("mtproto: resend failed");
                 continue;
             }
+            if (!matched) {
+                unmatched++;
+            }
             if (matched) {
                 // answers may arrive gzip-packed: transparently unwrap
                 while (result.size() > 4) {
                     TlReader gr(result);
                     if (gr.u32() != CRC_GZIP_PACKED) break;
+                    std::string packed = gr.str();
+                    if (!gr.ok() || packed.empty()) break;
                     std::string inflated;
-                    if (result.size() <= 8 || !gunzip(result.substr(8), inflated)) break;
+                    if (!gunzip(packed, inflated)) break;
                     result = std::move(inflated);
                 }
                 // translate rpc_error objects into errors
@@ -661,9 +696,13 @@ std::string Client::call_rpc(const std::string& serialized_request, std::string*
                         return {};
                     }
                 }
+                flush_acks();
                 return result;
             }
+            flush_acks();
         }
+        ADVAIT_LOG_WARN("mt", "rpc: timeout after 25s waiting_for=" + std::to_string(req_id) +
+                                  " unmatched_msgs=" + std::to_string(unmatched));
         return fail("mtproto: rpc timeout");
     }
     return {};
@@ -681,6 +720,7 @@ void Client::poll_updates() {
         std::string body;
         int64_t mid = 0;
         if (!decrypt_message(msg, &body, &mid)) continue;
+        if (mid != 0) queue_ack(mid);
         // unwrap containers, dispatch pushes
         if (body.size() >= 4) {
             TlReader peek(body);
@@ -692,7 +732,8 @@ void Client::poll_updates() {
                 r.u32();  // crc
                 uint32_t n = static_cast<uint32_t>(r.i32());
                 while (n-- && r.ok()) {
-                    r.i64();  // msg_id
+                    int64_t cmid = r.i64();
+                    if (cmid != 0) queue_ack(cmid);
                     r.i32();  // seqno
                     int32_t len = r.i32();
                     std::string child = r.blob(len);
@@ -704,6 +745,7 @@ void Client::poll_updates() {
             }
         }
     }
+    flush_acks();
 }
 
 void Client::set_update_handler(std::function<void(const UpdateEvent&)> h) {

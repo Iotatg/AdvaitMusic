@@ -33,6 +33,7 @@ public:
     void close();
 
     ntg::Client* binding() { return binding_.get(); }
+    std::shared_ptr<mtproto::Client> mt() const { return mt_; }
 
 private:
     struct Mounted {

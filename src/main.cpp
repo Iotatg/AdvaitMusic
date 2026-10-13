@@ -109,7 +109,9 @@ int main() {
         std::shared_ptr<advait::mtproto::Client> mt;
         try {
             auto ses = advait::mtproto::Client::parse_session_string(cfg.string_sessions[i]);
+            a->user_id = ses.user_id;
             mt = std::make_shared<advait::mtproto::Client>(ses, advait::mtproto::ClientConfig{});
+            ADVAIT_LOG_INFO("main", "assistant #" + std::to_string(a->index) + " user id " + std::to_string(a->user_id));
         } catch (const std::exception& e) {
             ADVAIT_LOG_ERROR("main", std::string("assistant session parse failed: ") + e.what());
         }

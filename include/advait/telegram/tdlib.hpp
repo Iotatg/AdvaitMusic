@@ -40,6 +40,12 @@ struct CallbackQuery {
 
 using CommandHandler = std::function<void(const Message&)>;
 using CallbackHandler = std::function<void(const CallbackQuery&)>;
+// Fired for EVERY new message (commands and plain texts alike) — used by the
+// sticker reply engine and group notes/filters. Handlers run inline in the
+// receive loop; dispatch to a thread if work is slow.
+using RawMessageHandler = std::function<void(const Message&)>;
+// Fired for updateChatMember updates (raw TDLib update json).
+using ChatMemberHandler = std::function<void(const nlohmann::json& update)>;
 
 class TdClient {
 public:
@@ -52,6 +58,8 @@ public:
 
     void on_command(const std::string& cmd, CommandHandler h);
     void on_callback(const std::string& prefix, CallbackHandler h);
+    void on_message(RawMessageHandler h);
+    void on_chat_member(ChatMemberHandler h);
 
     bool send_text(int64_t chat_id, const std::string& text, const nlohmann::json& markup = {});
     int64_t send_text_sync(int64_t chat_id, const std::string& text, const nlohmann::json& markup = {},
@@ -74,6 +82,39 @@ public:
     std::string me_username() const { return me_username_; }
     std::string me_first_name() const { return me_first_name_; }
     bool ready() const { return authorized_; }
+
+    // ---- chat membership helpers (assistant auto-join, KanhaMusic parity) ----
+    struct ChatMemberInfo {
+        bool ok{false};       // query succeeded (bot is admin enough to read members)
+        bool present{false};  // assistant is a chat member
+        bool banned{false};   // kicked / restricted without membership
+        std::string error;    // TDLib error message when !ok
+    };
+    ChatMemberInfo get_chat_member_state(int64_t chat_id, int64_t user_id);
+    std::string chat_public_username(int64_t chat_id);
+    bool create_chat_invite_link(int64_t chat_id, std::string* link, std::string* err);
+    bool approve_join_request(int64_t chat_id, int64_t user_id, std::string* err);
+
+    // ---- group-admin / moderation / sticker plumbing ----
+    bool send_chat_action(int64_t chat_id, const std::string& action_type);
+    // Sends a sticker by remote file id; returns the new message id (0 on failure).
+    int64_t send_sticker_sync(int64_t chat_id, const std::string& remote_file_id, int64_t reply_to = 0,
+                              int timeout_ms = 20000);
+    // Raw getStickerSet response ({} on failure): stickers[].{id, emoji}.
+    // TDLib >= 1.8.66: getStickerSet accepts only a numeric set_id.
+    nlohmann::json get_sticker_set(int64_t set_id);
+    // Raw getRepliedMessage response ({} on failure).
+    nlohmann::json get_replied_message(int64_t chat_id, int64_t message_id);
+    // Raw getUser response ({} on failure).
+    nlohmann::json get_user(int64_t user_id);
+    // Raw searchPublicChat response ({} on failure).
+    nlohmann::json search_public_chat(const std::string& username);
+    // Generic sync TDLib call for group-admin moderation (setChatMemberStatus,
+    // pin/unpin, deleteMessages, getChatHistory...). {} on failure.
+    nlohmann::json call_sync(const nlohmann::json& q, int timeout_ms = 15000);
+    // Raw sync query: surfaces the full response (including "@type":"error")
+    // so callers can read code/message for diagnostics.
+    nlohmann::json send_query_sync_public(const nlohmann::json& q, int timeout_ms = 15000);
 
 private:
     using TdCreate = int (*)();
@@ -101,6 +142,8 @@ private:
     std::mutex mu_;
     std::unordered_map<std::string, CommandHandler> commands_;
     std::vector<std::pair<std::string, CallbackHandler>> callbacks_;
+    std::vector<RawMessageHandler> message_hooks_;
+    ChatMemberHandler chat_member_hook_;
 
     bool load_tdjson();
     void send_query(const nlohmann::json& q);

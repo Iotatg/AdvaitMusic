@@ -31,7 +31,9 @@ nlohmann::json td_markup_to_bot(const nlohmann::json& mk) {
             nlohmann::json r = nlohmann::json::array();
             for (const auto& b : row) {
                 nlohmann::json out{{"text", b.value("text", "")}};
-                const nlohmann::json t = b.value("type", nlohmann::json::object());
+                const nlohmann::json t = b.contains("type") && b["type"].is_object()
+                                             ? b["type"]
+                                             : nlohmann::json::object();
                 auto tt = t.value("@type", "");
                 if (tt == "inlineKeyboardButtonTypeCallback")
                     out["callback_data"] = utils::base64_decode(t.value("data", ""));
@@ -385,7 +387,9 @@ nlohmann::json TdClient::bot_api(const std::string& method,
     CURL* c = curl_easy_init();
     if (!c || token_.empty()) {
         if (c) curl_easy_cleanup(c);
-        return {};
+        // Never return null JSON: callers call resp.value("ok", false), which
+        // throws json.type_error.306 on a null object.
+        return {{"ok", false}, {"error_code", -1}, {"description", "bot api client unavailable"}};
     }
     std::string url = "https://api.telegram.org/bot" + token_ + "/" + method;
     std::string body;
@@ -431,10 +435,13 @@ nlohmann::json TdClient::bot_api(const std::string& method,
     curl_easy_cleanup(c);
     if (rc != CURLE_OK) {
         ADVAIT_LOG_WARN("BotApi", method + ": curl error: " + std::string(curl_easy_strerror(rc)));
-        return {};
+        return {{"ok", false},
+                {"error_code", static_cast<int>(rc)},
+                {"description", std::string("curl error: ") + curl_easy_strerror(rc)}};
     }
     auto j = nlohmann::json::parse(resp, nullptr, false);
-    if (j.is_discarded()) return {};
+    if (j.is_discarded())
+        return {{"ok", false}, {"error_code", -2}, {"description", "bot api: malformed JSON response"}};
     return j;
 }
 
@@ -533,6 +540,188 @@ bool TdClient::delete_message(int64_t chat_id, int64_t message_id) {
     return resp.value("ok", false);
 }
 
+TdClient::ChatMemberInfo TdClient::get_chat_member_state(int64_t chat_id, int64_t user_id) {
+    ChatMemberInfo out;
+    auto resp = send_query_sync(
+        {{"@type", "getChatMember"},
+         {"chat_id", chat_id},
+         {"member_id", {{"@type", "messageSenderUser"}, {"user_id", user_id}}}},
+        10000);
+    if (!resp.is_object()) {
+        out.error = "telegram_error:0:empty_response";
+        return out;
+    }
+    if (resp.value("@type", "") == "error") {
+        // Surface the poll error text like KanhaMusic's wrapped fetch failures.
+        out.error = "telegram_error:" + std::to_string(resp.value("code", 0)) + ":" +
+                    resp.value("message", std::string());
+        return out;
+    }
+    out.ok = true;
+    auto status = resp.value("status", nlohmann::json::object());
+    auto kind = status.value("@type", "");
+    if (kind == "chatMemberStatusMember" || kind == "chatMemberStatusAdministrator" ||
+        kind == "chatMemberStatusCreator") {
+        out.present = true;
+    } else if (kind == "chatMemberStatusRestricted") {
+        // Restricted with membership is a member; without it, effectively kicked.
+        if (status.value("is_member", false)) {
+            out.present = true;
+        } else {
+            out.banned = true;
+        }
+    } else if (kind == "chatMemberStatusBanned") {
+        out.banned = true;
+    }
+    return out;
+}
+
+std::string TdClient::chat_public_username(int64_t chat_id) {
+    auto chat = send_query_sync({{"@type", "getChat"}, {"chat_id", chat_id}}, 10000);
+    if (!chat.is_object() || chat.value("@type", "") == "error") return {};
+    if (!chat.contains("type") || !chat["type"].is_object()) return {};
+    auto ctype = chat["type"].value("@type", "");
+    if (ctype != "chatTypeSupergroup") return {};
+    auto sg = send_query_sync({{"@type", "getSupergroup"}, {"supergroup_id", chat["type"].value("supergroup_id", 0LL)}},
+                              10000);
+    if (!sg.is_object() || sg.value("@type", "") == "error") return {};
+    if (sg.contains("usernames") && sg["usernames"].is_object()) {
+        auto& un = sg["usernames"];
+        if (un.contains("active_usernames") && un["active_usernames"].is_array() && !un["active_usernames"].empty() &&
+            un["active_usernames"][0].is_string())
+            return un["active_usernames"][0].get<std::string>();
+    }
+    return sg.value("username", std::string());
+}
+
+bool TdClient::create_chat_invite_link(int64_t chat_id, std::string* link, std::string* err) {
+    auto resp = send_query_sync({{"@type", "createChatInviteLink"},
+                                 {"chat_id", chat_id},
+                                 {"creation_limit", 0},
+                                 {"join_request", false}},
+                                15000);
+    if (!resp.is_object() || resp.value("@type", "") == "error") {
+        std::string e = "telegram_error:" + std::to_string(resp.is_object() ? resp.value("code", 0) : 0) + ":" +
+                        (resp.is_object() ? resp.value("message", std::string()) : std::string());
+        if (!resp.is_object() || resp.value("@type", "") != "error")
+            e = "bot: createChatInviteLink returned no invite link";
+        if (err) *err = e;
+        return false;
+    }
+    // chatInviteLink carries the URL at top level ("invite_link": string).
+    std::string l = resp.value("invite_link", std::string());
+    if (l.empty()) {
+        if (err) *err = "bot: createChatInviteLink returned an empty link";
+        return false;
+    }
+    if (link) *link = l;
+    return true;
+}
+
+bool TdClient::approve_join_request(int64_t chat_id, int64_t user_id, std::string* err) {
+    auto resp = send_query_sync(
+        {{"@type", "processChatJoinRequest"}, {"chat_id", chat_id}, {"user_id", user_id}, {"approve", true}}, 15000);
+    if (!resp.is_object() || resp.value("@type", "") == "error") {
+        if (err)
+            *err = "telegram_error:" + std::to_string(resp.is_object() ? resp.value("code", 0) : 0) + ":" +
+                   (resp.is_object() ? resp.value("message", std::string()) : std::string());
+        return false;
+    }
+    return true;
+}
+
+void TdClient::on_message(RawMessageHandler h) {
+    std::lock_guard<std::mutex> g(mu_);
+    message_hooks_.push_back(std::move(h));
+}
+
+void TdClient::on_chat_member(ChatMemberHandler h) {
+    std::lock_guard<std::mutex> g(mu_);
+    chat_member_hook_ = std::move(h);
+}
+
+bool TdClient::send_chat_action(int64_t chat_id, const std::string& action_type) {
+    // Fire-and-forget: no result expected, async queue keeps the loop free.
+    send_query({{"@type", "sendChatAction"}, {"chat_id", chat_id}, {"action", {{"@type", action_type}}}});
+    return true;
+}
+
+int64_t TdClient::send_sticker_sync(int64_t chat_id, const std::string& file_id, int64_t reply_to,
+                                    int timeout_ms) {
+    // TDLib >= 1.8.15 dropped inputFileRemote, so reposted stickers are sent via
+    // the session-local numeric file id (stored in our packs). Strings that are
+    // not pure digits fall back to the legacy remote id path for old servers.
+    nlohmann::json file;
+    auto is_digits = [](const std::string& s) {
+        if (s.empty()) return false;
+        for (char c : s)
+            if (c < '0' || c > '9') return false;
+        return true;
+    };
+    if (is_digits(file_id)) {
+        file = {{"@type", "inputFileId"}, {"id", std::stoll(file_id)}};
+    } else {
+        file = {{"@type", "inputFileRemote"}, {"id", file_id}};
+    }
+    nlohmann::json q = {{"@type", "sendMessage"},
+                        {"chat_id", chat_id},
+                        {"input_message_content",
+                         {{"@type", "inputMessageSticker"},
+                          {"sticker", std::move(file)},
+                          {"width", 512},
+                          {"height", 512},
+                          {"emoji", ""}}}};
+    if (reply_to != 0) q["reply_to"] = {{"@type", "inputMessageReplyToMessage"}, {"message_id", reply_to}};
+    auto resp = send_query_sync(q, timeout_ms);
+    if (!resp.is_object() || resp.value("@type", "") != "message") return 0;
+    return resp.value("id", 0LL);
+}
+
+nlohmann::json TdClient::get_sticker_set(int64_t set_id) {
+    auto resp = send_query_sync({{"@type", "getStickerSet"}, {"set_id", set_id}}, 15000);
+    if (!resp.is_object() || resp.value("@type", "") != "stickerSet") return {};
+    return resp;
+}
+
+nlohmann::json TdClient::get_replied_message(int64_t chat_id, int64_t message_id) {
+    auto resp = send_query_sync({{"@type", "getRepliedMessage"}, {"chat_id", chat_id}, {"message_id", message_id}},
+                                10000);
+    if (!resp.is_object()) {
+        ADVAIT_LOG_WARN("tdlib", "getRepliedMessage chat=" + std::to_string(chat_id) +
+                                     " msg=" + std::to_string(message_id) + ": non-object response");
+        return {};
+    }
+    if (resp.value("@type", "") == "error") {
+        ADVAIT_LOG_WARN("tdlib", "getRepliedMessage chat=" + std::to_string(chat_id) +
+                                     " msg=" + std::to_string(message_id) + " failed: " +
+                                     resp.dump());
+        return {};
+    }
+    return resp;
+}
+
+nlohmann::json TdClient::get_user(int64_t user_id) {
+    auto resp = send_query_sync({{"@type", "getUser"}, {"user_id", user_id}}, 10000);
+    if (!resp.is_object() || resp.value("@type", "") != "user") return {};
+    return resp;
+}
+
+nlohmann::json TdClient::search_public_chat(const std::string& username) {
+    auto resp = send_query_sync({{"@type", "searchPublicChat"}, {"username", username}}, 10000);
+    if (!resp.is_object() || resp.value("@type", "") == "error") return {};
+    return resp;
+}
+
+nlohmann::json TdClient::call_sync(const nlohmann::json& q, int timeout_ms) {
+    auto resp = send_query_sync(q, timeout_ms);
+    if (!resp.is_object() || resp.value("@type", "") == "error") return {};
+    return resp;
+}
+
+nlohmann::json TdClient::send_query_sync_public(const nlohmann::json& q, int timeout_ms) {
+    return send_query_sync(q, timeout_ms);
+}
+
 void TdClient::handle_authorization(const nlohmann::json& state) {
     auto t = state.value("@type", "");
     if (t == "authorizationStateWaitTdlibParameters") {
@@ -568,14 +757,33 @@ void TdClient::handle_message(const nlohmann::json& msg) {
         if (s.value("@type", "") == "messageSenderUser") m.sender_id = s.value("user_id", 0LL);
     }
     m.is_private = m.chat_id > 0;
-    if (msg.contains("reply_to") && msg["reply_to"].is_object())
+    if (msg.contains("reply_to") && msg["reply_to"].is_object()) {
         m.reply_to = msg["reply_to"].value("message_id", 0LL);
+        ADVAIT_LOG_INFO("dispatcher",
+                        "reply_to raw: self_id=" + std::to_string(m.id) + " chat=" +
+                            std::to_string(m.chat_id) + " reply=" + msg["reply_to"].dump());
+    }
     auto content = msg.value("content", nlohmann::json::object());
     if (content.value("@type", "") == "messageText") {
         m.text = content.value("text", nlohmann::json::object()).value("text", "");
     } else if (content.contains("caption")) {
         m.text = content["caption"].value("text", "");
     }
+
+    // Raw-message hooks (sticker engine, notes/filters) see every message.
+    std::vector<RawMessageHandler> hooks_snapshot;
+    {
+        std::lock_guard<std::mutex> g(mu_);
+        hooks_snapshot = message_hooks_;
+    }
+    for (auto& h : hooks_snapshot) {
+        try {
+            h(m);
+        } catch (const std::exception& e) {
+            ADVAIT_LOG_ERROR("dispatcher", std::string("message hook: ") + e.what());
+        }
+    }
+
     if (m.text.empty() || m.text[0] != '/') return;
     auto space = m.text.find(' ');
     auto cmd = m.text.substr(1, (space == std::string::npos ? m.text.size() : space) - 1);
@@ -590,11 +798,12 @@ void TdClient::handle_message(const nlohmann::json& msg) {
         h = it->second;
     }
     auto msg_copy = m;
-    std::thread([h, msg_copy]() {
+    std::thread([h, msg_copy, cmd]() {
+        ADVAIT_LOG_INFO("dispatch", std::string("cmd /") + cmd + " chat=" + std::to_string(msg_copy.chat_id));
         try {
             h(msg_copy);
         } catch (const std::exception& e) {
-            ADVAIT_LOG_ERROR("dispatcher", std::string("handler: ") + e.what());
+            ADVAIT_LOG_ERROR("dispatcher", std::string("handler /") + cmd + ": " + e.what());
         }
     }).detach();
 }
@@ -734,6 +943,21 @@ void TdClient::process(const nlohmann::json& update) {
     }
     if (t == "updateNewCallbackQuery") {
         handle_callback(update);
+        return;
+    }
+    if (t == "updateChatMember") {
+        ChatMemberHandler h;
+        {
+            std::lock_guard<std::mutex> g(mu_);
+            h = chat_member_hook_;
+        }
+        if (h) {
+            try {
+                h(update);
+            } catch (const std::exception& e) {
+                ADVAIT_LOG_ERROR("dispatcher", std::string("chat member hook: ") + e.what());
+            }
+        }
         return;
     }
 }

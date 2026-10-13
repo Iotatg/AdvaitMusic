@@ -2,7 +2,10 @@
 #include "advait/modules/admin_lists.hpp"
 #include "advait/modules/admin_system.hpp"
 #include "advait/modules/common.hpp"
+#include "advait/modules/group_admin.hpp"
+#include "advait/modules/moderation.hpp"
 #include "advait/modules/playlists.hpp"
+#include "advait/modules/sticker.hpp"
 #include "advait/modules/vc_control.hpp"
 #include "advait/core/assistant.hpp"
 #include "advait/core/buttons.hpp"
@@ -347,6 +350,9 @@ void init(tg::TdClient& bot, AssistantManager* assistants) {
     init_admin_lists(bot);
     init_admin_system(bot);
     init_playlists(bot);
+    init_group_admin(bot);
+    init_moderation(bot);
+    init_sticker(bot);
 
     start_room_monitor();
     wire_stream_end(assistants);

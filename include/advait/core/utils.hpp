@@ -22,6 +22,7 @@ std::string getenv_str(const char* key, const std::string& def = {});
 std::string trim(std::string s);
 std::string to_lower(std::string s);
 std::string html_mention(const std::string& name, int64_t id);
+std::string stylish(const std::string& in);
 std::string base64_encode(const std::string& in);
 std::string base64_decode(const std::string& in);
 
