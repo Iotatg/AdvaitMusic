@@ -39,6 +39,8 @@ std::vector<Track> resolve_query(const std::string& query, bool video);
 std::string download_track(const Track& track, std::string* err, const DownloadHooks* hooks = nullptr);
 std::vector<Track> search_tracks(const std::string& query, bool video);
 std::vector<Track> autoplay_tracks(const Track& last, int limit, const std::vector<std::string>& history);
+std::string clean_song_title_for_search(const std::string& title);
+const Track& golden_zone_pick(const std::vector<Track>& candidates);
 std::string iota_media_id(const Track& t);
 std::vector<Track> iota_similar(const std::string& media_id, int limit);
 

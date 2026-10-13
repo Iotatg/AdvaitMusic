@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <mutex>
+#include <random>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -76,22 +78,77 @@ std::vector<Track> search_tracks(const std::string& query, bool video) {
 }
 
 std::vector<Track> autoplay_tracks(const Track& last, int limit, const std::vector<std::string>& history) {
-    auto* yt = get_platform(kPlatformYouTube);
-    if (!yt) return {};
-    auto candidates = yt->get(last.title + " song", last.video);
     std::unordered_map<std::string, bool> hist;
     for (auto& h : history) hist[h] = true;
+
     std::vector<Track> filtered;
-    for (auto& t : candidates) {
-        if (t.id.empty() || t.id == last.id) continue;
-        if (hist["id:" + t.id]) continue;
+    auto accept = [&](const Track& t) {
+        if (t.id.empty() && t.url.empty()) return false;
+        if (!t.id.empty() && t.id == last.id) return false;
+        if (!t.id.empty() && hist["id:" + t.id]) return false;
         auto n = normalize_track_title(t.title);
-        if (!n.empty() && hist["title:" + n]) continue;
-        t.video = last.video;
-        filtered.push_back(t);
-        if (limit > 0 && static_cast<int>(filtered.size()) >= limit) break;
+        if (!n.empty() && hist["title:" + n]) return false;
+        return true;
+    };
+    auto fill = [&](const std::vector<Track>& in) {
+        for (auto& t : in) {
+            if (!accept(t)) continue;
+            Track c = t;
+            c.video = last.video;
+            filtered.push_back(c);
+            if (limit > 0 && static_cast<int>(filtered.size()) >= limit) break;
+        }
+    };
+
+    // ── Tier 0: provider-agnostic similarity via iota (Kanha call.go Tier 0) ──
+    // Works for any source; the /similar backend excludes the input itself, and
+    // the prefixed form of the current track is filtered too. Limit 8 like the
+    // reference.
+    auto media = iota_media_id(last);
+    if (!media.empty()) {
+        for (auto& t : iota_similar(media, 8)) {
+            if (!t.id.empty() && t.id == media) continue;
+            if (!accept(t)) continue;
+            Track c = t;
+            c.video = last.video;
+            filtered.push_back(c);
+            if (limit > 0 && static_cast<int>(filtered.size()) >= limit) break;
+        }
+    }
+
+    // ── Tier 1: smart search fallback (Kanha Tier 2) ─────────────────────────
+    // "<cleanTitle> similar songs" beats "<raw title> song" on vibe matching:
+    // artists/lyrics sites dominate the query, and junk like "(Official Video)"
+    // or "| [Lyrics]" is stripped from the title first.
+    if (filtered.empty()) {
+        auto* yt = get_platform(kPlatformYouTube);
+        if (yt) fill(yt->get(clean_song_title_for_search(last.title) + " similar songs", last.video));
     }
     return filtered;
+}
+
+// clean_song_title_for_search strips noise suffixes so the autoplay fallback
+// query reads like a real search (Kanha cleanSongTitleForSearch).
+std::string clean_song_title_for_search(const std::string& title) {
+    std::string t = title;
+    for (const char* sep : {"|", "(", "["}) {
+        auto p = t.find(sep);
+        if (p != std::string::npos) t = t.substr(0, p);
+    }
+    auto b = t.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return {};
+    auto e = t.find_last_not_of(" \t\r\n");
+    return t.substr(b, e - b + 1);
+}
+
+const Track& golden_zone_pick(const std::vector<Track>& candidates) {
+    // Golden-Zone Selection: pick from strictly the Top 4 closest matches.
+    // The relevance ranking puts the closest matches first, so a random pick
+    // from the top of the list both varies the queue and stays relevant
+    // (Kanha call.go:345-357).
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    size_t pool = candidates.size() < 4 ? candidates.size() : 4;
+    return candidates[pool == 1 ? 0 : rng() % pool];
 }
 
 void init_platforms() {

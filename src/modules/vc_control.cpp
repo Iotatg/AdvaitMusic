@@ -707,11 +707,16 @@ void handle_autoplay_skip(const tg::Message& m, bool cplay) {
 
   Track next{};
   bool found = false;
-  for (auto& cand : platforms::autoplay_tracks(*last, 5, r->played_history())) {
-    if (cand.id.empty() && cand.url.empty()) continue;
-    next = cand;
-    found = true;
-    break;
+  {
+    std::vector<Track> pool;
+    for (auto& cand : platforms::autoplay_tracks(*last, 5, r->played_history())) {
+      if (cand.id.empty() && cand.url.empty()) continue;
+      pool.push_back(cand);
+    }
+    if (!pool.empty()) {
+      next = platforms::golden_zone_pick(pool);
+      found = true;
+    }
   }
   if (!found) {
     lm.eor(F(chat_id, "askip_no_recommendations"));

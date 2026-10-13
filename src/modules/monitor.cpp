@@ -65,11 +65,14 @@ void advance_room(int64_t chat_id) {
         } else if (r->autoplay()) {
             auto last = r->track();
             if (last) {
+                std::vector<Track> pool;
                 for (auto& c : platforms::autoplay_tracks(*last, 5, r->played_history())) {
                     if (c.id.empty() && c.url.empty()) continue;
-                    c.mark_autoplay(F(chat_id, "autoplay_requester"), r->engine_token());
-                    next = c;
-                    break;
+                    pool.push_back(c);
+                }
+                if (!pool.empty()) {
+                    next = platforms::golden_zone_pick(pool);
+                    next->mark_autoplay(F(chat_id, "autoplay_requester"), r->engine_token());
                 }
             }
         }
@@ -84,7 +87,8 @@ void advance_room(int64_t chat_id) {
         std::string dl_err;
         auto path = platforms::download_track(*next, &dl_err);
         if (path.empty() && next->is_autoplay) {
-            // One re-pick attempt for autoplay, mirroring Go's retry tiers.
+            // Re-pick pass for autoplay on download failure, mirroring Go's
+            // retry tiers (8 candidates this time, tried in relevance order).
             auto last = r->track();
             if (last) {
                 for (auto& c : platforms::autoplay_tracks(*last, 8, r->played_history())) {

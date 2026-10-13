@@ -134,15 +134,18 @@ std::string mood_from_text(const std::string& text) {
 std::string sticker_file_id(const json& content) {
     auto s = content.find("sticker");
     if (s == content.end() || !s->is_object()) return {};
-    // The sendable file id lives on the embedded file: sticker["sticker"].id.
+    // The sendable id is the REMOTE file id on the embedded file:
+    // sticker["sticker"]["remote"]["id"] — a stable string usable via
+    // inputFileRemote (Aishamusic-2: stickerRemoteID returns st.Sticker.Remote.Id).
+    // The local numeric id is session-scoped and goes stale on restart.
     auto f = s->find("sticker");
     if (f != s->end() && f->is_object()) {
-        auto id = f->find("id");
-        if (id != f->end() && id->is_number()) return std::to_string(id->get<int64_t>());
+        auto r = f->find("remote");
+        if (r != f->end() && r->is_object()) {
+            auto rid = r->find("id");
+            if (rid != r->end() && rid->is_string()) return rid->get<std::string>();
+        }
     }
-    // Older layouts kept only the numeric sticker id on the node.
-    auto id = s->find("id");
-    if (id != s->end() && id->is_number()) return std::to_string(id->get<int64_t>());
     return {};
 }
 
@@ -215,9 +218,11 @@ std::string mood_for(TdClient& bot, const Message& m, const json& content) {
     return "default";
 }
 
-// Sendable id of a sticker: the numeric file id under content["sticker"]. It
-// reposts reliably on TDLib >= 1.8.15 (inputFileRemote was removed) and is our
-// pack storage format.
+// Sendable id of a sticker: the REMOTE file id under
+// content["sticker"]["sticker"]["remote"]["id"]. inputFileRemote is alive in
+// TDLib 1.8.x; the remote id is what addresses a send across sessions
+// (Aishamusic-2 sticker.go: "Packs store the sticker's remote file id (a
+// string) and send with InputFileRemote").
 std::string remote_id_of(const json& content) { return sticker_file_id(content); }
 
 json sticker_content_of(const json& message) {
@@ -294,6 +299,63 @@ void sticker_engine(TdClient& bot, const Message& m) {
 
 // ── owner curation commands ─────────────────────────────────────────────────
 bool owner_only(const Message& m) { return Config::get().owner_id != 0 && Config::get().owner_id == m.sender_id; }
+
+// Diagnostic: pull the last sticker from chat history and attempt sends with
+// every InputFile variant, dumping the exact request and TDLib's response.
+void stickerdiag_handler(TdClient& bot, const Message& m) {
+    if (!owner_only(m)) {
+        reply(bot, m, owner_only());
+        return;
+    }
+    auto hist = bot.call_sync({{"@type", "getChatHistory"},
+                               {"chat_id", m.chat_id},
+                               {"from_message_id", 0},
+                               {"offset", 0},
+                               {"limit", 15},
+                               {"only_local", false}},
+                              15000);
+    ADVAIT_LOG_INFO("sticker", "diag hist type=" + jstr(hist, "@type"));
+    std::string remote_id, raw;
+    int64_t local_id = 0;
+    for (auto& mid : hist.value("messages", json::array())) {
+        json c = mid.value("content", json::object());
+        if (c.value("@type", "") != "messageSticker") continue;
+        raw = c.dump();
+        json s = c.value("sticker", json::object());
+        json f = s.value("sticker", json::object());
+        if (f.contains("remote")) remote_id = f["remote"].value("id", "");
+        if (f.is_number()) local_id = f.get<int64_t>();
+        break;
+    }
+    ADVAIT_LOG_INFO("sticker", "diag remote=" + remote_id + " local=" + std::to_string(local_id) +
+                                    " raw=" + raw.substr(0, 600));
+    reply(bot, m, styled("diag remote=" + remote_id.substr(0, 40) + " local=" + std::to_string(local_id)));
+
+    struct V {
+        const char* name;
+        json sticker;
+    };
+    std::vector<V> vars;
+    if (!remote_id.empty())
+        vars.push_back({"remote", json{{"@type", "inputFileRemote"}, {"id", remote_id}}});
+    if (local_id != 0)
+        vars.push_back({"localid", json{{"@type", "inputFileId"}, {"id", local_id}}});
+    for (auto& v : vars) {
+        json q = {{"@type", "sendMessage"},
+                  {"chat_id", m.chat_id},
+                  {"input_message_content",
+                   {{"@type", "inputMessageSticker"},
+                    {"sticker", v.sticker},
+                    {"width", 512},
+                    {"height", 512},
+                    {"emoji", ""}}}};
+        auto r = bot.send_query_sync_public(q, 15000);
+        ADVAIT_LOG_INFO("sticker", std::string("diag variant ") + v.name + " req=" + q.dump() +
+                                        " resp=" + r.dump().substr(0, 300));
+        reply(bot, m, styled(std::string("variant ") + v.name + ": " + jstr(r, "@type") + " " +
+                             jstr(r, "message")));
+    }
+}
 
 void add_sticker_handler(TdClient& bot, const Message& m) {
     if (!owner_only(m)) {
@@ -387,6 +449,7 @@ void clear_stickers_handler(TdClient& bot, const Message& m) {
 void init_sticker(tg::TdClient& bot) {
     bot.on_message([&bot](const tg::Message& m) { sticker_engine(bot, m); });
     bot.on_command("addsticker", [&bot](const tg::Message& m) { add_sticker_handler(bot, m); });
+    bot.on_command("stickerdiag", [&bot](const tg::Message& m) { stickerdiag_handler(bot, m); });
     bot.on_command("stickerpacks", [&bot](const tg::Message& m) { sticker_packs_handler(bot, m); });
     bot.on_command("previewsticker", [&bot](const tg::Message& m) { preview_sticker_handler(bot, m); });
     bot.on_command("clearstickers", [&bot](const tg::Message& m) { clear_stickers_handler(bot, m); });

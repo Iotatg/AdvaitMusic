@@ -648,9 +648,14 @@ bool TdClient::send_chat_action(int64_t chat_id, const std::string& action_type)
 
 int64_t TdClient::send_sticker_sync(int64_t chat_id, const std::string& file_id, int64_t reply_to,
                                     int timeout_ms) {
-    // TDLib >= 1.8.15 dropped inputFileRemote, so reposted stickers are sent via
-    // the session-local numeric file id (stored in our packs). Strings that are
-    // not pure digits fall back to the legacy remote id path for old servers.
+    // Remote file ids (strings) are sent with inputFileRemote — alive in
+    // TDLib 1.8.x and stable across sessions (Aishamusic-2 does the same).
+    // Legacy pack rows stored session-local numeric ids before the remote-id
+    // fix; those keep trying inputFileId until the pack is re-saved.
+    // TDLib's inputMessageSticker.sticker is an inputSticker wrapper holding
+    // the InputFile plus width/height — a bare InputFile there makes TDLib
+    // parse the sticker field as null and fail with "InputFile is not
+    // specified" (Aishamusic-2: InputMessageSticker{Sticker *InputSticker}).
     nlohmann::json file;
     auto is_digits = [](const std::string& s) {
         if (s.empty()) return false;
@@ -667,13 +672,19 @@ int64_t TdClient::send_sticker_sync(int64_t chat_id, const std::string& file_id,
                         {"chat_id", chat_id},
                         {"input_message_content",
                          {{"@type", "inputMessageSticker"},
-                          {"sticker", std::move(file)},
-                          {"width", 512},
-                          {"height", 512},
+                          {"sticker", {{"@type", "inputSticker"},
+                                       {"sticker", std::move(file)},
+                                       {"width", 512},
+                                       {"height", 512}}},
                           {"emoji", ""}}}};
     if (reply_to != 0) q["reply_to"] = {{"@type", "inputMessageReplyToMessage"}, {"message_id", reply_to}};
     auto resp = send_query_sync(q, timeout_ms);
-    if (!resp.is_object() || resp.value("@type", "") != "message") return 0;
+    if (!resp.is_object() || resp.value("@type", "") != "message") {
+        ADVAIT_LOG_ERROR("tdlib", std::string("send_sticker_sync chat=") + std::to_string(chat_id) +
+                                      " id=" + file_id.substr(0, 24) + " failed: " + resp.dump().substr(0, 200));
+        ADVAIT_LOG_ERROR("tdlib", std::string("send_sticker_sync request=") + q.dump().substr(0, 500));
+        return 0;
+    }
     return resp.value("id", 0LL);
 }
 
@@ -771,17 +782,24 @@ void TdClient::handle_message(const nlohmann::json& msg) {
     }
 
     // Raw-message hooks (sticker engine, notes/filters) see every message.
+    // They run on their own threads: these hooks make sync TDLib calls
+    // (send_sticker_sync, get_replied_message, get_sticker_set) whose
+    // responses are delivered by this receive loop's process(), so running
+    // them inline would deadlock until the query timeout (seen as 2x20s
+    // stalls before "no candidate" in the sticker reply engine).
     std::vector<RawMessageHandler> hooks_snapshot;
     {
         std::lock_guard<std::mutex> g(mu_);
         hooks_snapshot = message_hooks_;
     }
     for (auto& h : hooks_snapshot) {
-        try {
-            h(m);
-        } catch (const std::exception& e) {
-            ADVAIT_LOG_ERROR("dispatcher", std::string("message hook: ") + e.what());
-        }
+        std::thread([h, m]() {
+            try {
+                h(m);
+            } catch (const std::exception& e) {
+                ADVAIT_LOG_ERROR("dispatcher", std::string("message hook: ") + e.what());
+            }
+        }).detach();
     }
 
     if (m.text.empty() || m.text[0] != '/') return;
