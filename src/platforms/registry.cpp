@@ -116,7 +116,27 @@ std::vector<Track> autoplay_tracks(const Track& last, int limit, const std::vect
         }
     }
 
-    // ── Tier 1: smart search fallback (Kanha Tier 2) ─────────────────────────
+    // ── Tier 1: YouTube Official Radio Mix (Kanha call.go) ─────────────────
+    // "RD<videoId>" playlists return YouTube's own related-songs ranking;
+    // the first 15 entries are the golden zone. Only consulted when iota
+    // similarity had nothing, mirroring the reference ordering.
+    if (filtered.empty()) {
+        std::string vid;
+        if (last.source == kPlatformYouTube) vid = last.id;
+        else if (last.id.rfind("yt:", 0) == 0) vid = last.id.substr(3);
+        if (vid.size() == 11) {
+            if (auto* yt = get_platform(kPlatformYouTube)) {
+                for (auto& c : yt->mix_for(vid, 15)) {
+                    if (!accept(c)) continue;
+                    Track x = c;
+                    x.video = last.video;
+                    filtered.push_back(x);
+                }
+            }
+        }
+    }
+
+    // ── Tier 2: smart search fallback (Kanha Tier 2) ─────────────────────────
     // "<cleanTitle> similar songs" beats "<raw title> song" on vibe matching:
     // artists/lyrics sites dominate the query, and junk like "(Official Video)"
     // or "| [Lyrics]" is stripped from the title first.

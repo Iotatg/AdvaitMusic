@@ -29,6 +29,14 @@ public:
     virtual int priority() const = 0;
     virtual bool can_get(const std::string& query) const = 0;
     virtual std::vector<Track> get(const std::string& query, bool video) = 0;
+    // Related-songs suggestions for autoplay (Kanha fetchMixPlaylist):
+    // video_id is the bare 11-char YouTube id; platforms without a mix
+    // concept return an empty vector.
+    virtual std::vector<Track> mix_for(const std::string& video_id, int limit) {
+        (void)video_id;
+        (void)limit;
+        return {};
+    }
     virtual bool can_download(const PlatformName& source) const = 0;
     virtual std::string download(const Track& track, std::string* err, const DownloadHooks* hooks = nullptr) = 0;
 };

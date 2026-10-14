@@ -304,6 +304,30 @@ void handle_room_cb(const tg::CallbackQuery& cb) {
     bot.answer_callback(cb.query_id, F(chat_id, "unknown_action"), true);
 }
 
+// ── Voice-chat lifecycle (TDLib service messages, Kanha actions.go) ──────
+// Telegram posts started/ended service messages into the chat. On ended:
+// send the duration card and tear the room down so autoplay/music can
+// never outlive the call (the old bug: queue kept advancing for 1d+).
+void handle_voicechat_events(const tg::Message& m) {
+    if (m.is_private || m.is_channel) return;
+    auto content = m.raw.value("content", nlohmann::json::object());
+    auto t = content.value("@type", "");
+    if (t == "messageVideoChatStarted" || t == "messageVoiceChatStarted") {
+        tg::bot().send_text(m.chat_id, F(m.chat_id, "voicechat_started"));
+        return;
+    }
+    if (t != "messageVideoChatEnded" && t != "messageVoiceChatEnded") return;
+    auto dur = content.value("duration", 0);
+    if (dur < 0) dur = 0;
+    tg::bot().send_text(
+        m.chat_id,
+        F(m.chat_id, "voicechat_ended", {{"duration", utils::format_duration(static_cast<int>(dur))}}));
+    if (drop_room(m.chat_id)) {
+        ADVAIT_LOG_INFO("handlers", "voice chat ended chat=" + std::to_string(m.chat_id) +
+                                        " duration=" + std::to_string(dur) + "s; room dropped");
+    }
+}
+
 void init(tg::TdClient& bot, AssistantManager* assistants) {
     g_assistants = assistants;
     platforms::init_platforms();
@@ -354,6 +378,7 @@ void init(tg::TdClient& bot, AssistantManager* assistants) {
     init_group_admin(bot);
     init_moderation(bot);
     init_sticker(bot);
+    bot.on_message([](const tg::Message& m) { handle_voicechat_events(m); });
 
     start_room_monitor();
     wire_stream_end(assistants);

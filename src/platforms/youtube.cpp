@@ -254,6 +254,11 @@ public:
         return tracks;
     }
 
+    std::vector<Track> mix_for(const std::string& video_id, int limit) override {
+        if (video_id.size() != 11) return {};
+        return fetch_mix("RD" + video_id, limit);
+    }
+
     std::vector<Track> handle_track(const std::string& raw) {
         auto video_id = extract_video(raw);
         if (video_id.empty()) return {};
