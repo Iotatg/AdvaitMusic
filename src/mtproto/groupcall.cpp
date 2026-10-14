@@ -321,14 +321,17 @@ bool Client::fetch_self_user(int64_t* out_id, int64_t* out_ah, std::string* err)
 }
 
 bool Client::join_group_call(const GroupCallRef& call, const std::string& params_json, std::string* server_params,
-                             std::string* err) {
+                             std::string* err, bool send_video) {
     int64_t ah = 0;
     if (!self_access_hash(&ah, err)) {
         return false;
     }
     TlWriter w;
     w.u32(0x8fb53057u);    // phone.joinGroupCall
-    w.u32(0x4u);           // flags: video_stopped (audio-only join), muted=false
+    // flags: bit 0x4 = video_stopped. With it set Telegram marks the
+    // participant camera-off and drops every inbound video frame, so a
+    // /vplay join without the bit stays a silent black screen.
+    w.u32(send_video ? 0x0u : 0x4u);
     w.u32(0xd8aa840fu);    // inputGroupCall
     w.i64(call.id);
     w.i64(call.access_hash);

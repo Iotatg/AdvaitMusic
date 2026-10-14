@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <thread>
+#include <unordered_map>
 
 namespace advait::modules {
 namespace {
@@ -32,12 +33,19 @@ void set_status(RoomState* r, const std::string& text) {
 }
 
 std::atomic<bool> g_running{false};
+std::unordered_map<int64_t, int> g_end_streak;
 
 }  // namespace
 
 void advance_room(int64_t chat_id) {
     auto* r = room_for(chat_id);
-    if (!r || r->destroyed()) return;
+    // Serialize: stream-end threads and the monitor watchdog can both call
+    // this; two concurrent advances hammer the voice engine and TDLib.
+    if (!r || r->destroyed() || !r->try_lock_advance()) return;
+    struct AdvGuard {
+        RoomState* r;
+        ~AdvGuard() { r->unlock_advance(); }
+    } guard{r};
     try {
         // Loop mode repeats the current track (Go: loopCount decrement).
         if (r->loop() > 0) {
@@ -78,11 +86,13 @@ void advance_room(int64_t chat_id) {
         }
 
         if (!next) {
+            ADVAIT_LOG_INFO("monitor", "advance chat " + std::to_string(chat_id) + ": queue finished");
             set_status(r, F(chat_id, "stream_queue_finished"));
             drop_room(chat_id);
             return;
         }
-
+        ADVAIT_LOG_INFO("monitor", "advance chat " + std::to_string(chat_id) + ": next track \"" +
+                                       next->title + "\"");
         set_status(r, F(chat_id, "stream_downloading_next"));
         std::string dl_err;
         auto path = platforms::download_track(*next, &dl_err);
@@ -104,6 +114,8 @@ void advance_room(int64_t chat_id) {
             }
         }
         if (path.empty()) {
+            ADVAIT_LOG_WARN("monitor", "advance chat " + std::to_string(chat_id) +
+                                          ": download failed: " + (dl_err.empty() ? "unknown" : dl_err));
             set_status(r, F(chat_id, "stream_download_fail", {{"error", dl_err.empty() ? "download" : dl_err}}));
             drop_room(chat_id);
             return;
@@ -130,9 +142,25 @@ void start_room_monitor() {
                     if (!r || !r->active() || r->paused() || r->destroyed()) continue;
                     auto t = r->track();
                     if (!t) continue;
+                    r->tick_position();
+                    int pos = r->position();
+                    // If libntgcalls drops the stream-end callback, the queue
+                    // would stall forever: detect "past the end" for three
+                    // consecutive ticks (12s) and advance manually. Strict
+                    // >= duration so seeking near the end cannot false-fire.
+                    if (t->duration > 0 && pos >= t->duration) {
+                        int& s = g_end_streak[id];
+                        if (++s >= 3) {
+                            g_end_streak.erase(id);
+                            ADVAIT_LOG_INFO("monitor", "end watchdog: advancing chat " + std::to_string(id));
+                            std::thread([id] { advance_room(id); }).detach();
+                            continue;
+                        }
+                    } else {
+                        g_end_streak.erase(id);
+                    }
                     int64_t mid = r->status_msg.load();
                     if (mid == 0) continue;
-                    int pos = r->position();
                     if (t->duration > 0 && pos >= t->duration) continue;
                     auto chat_id = r->chat_id;
                     auto text = now_playing_text(chat_id, *t);

@@ -54,6 +54,12 @@ public:
     void shuffle();
     std::string file_path() const;
     std::vector<std::string> played_history() const;
+    void tick_position();
+    bool try_lock_advance() {
+        bool expected = false;
+        return advancing_.compare_exchange_strong(expected, true);
+    }
+    void unlock_advance() { advancing_.store(false); }
     std::string engine_token() const { return engine_token_; }
 
 private:
@@ -73,6 +79,7 @@ private:
     std::vector<std::string> played_history_;
     std::string engine_token_;
     std::atomic<bool> destroyed_{false};
+    std::atomic<bool> advancing_{false};
 
     bool play_native(std::string* err = nullptr);
     void update_position();

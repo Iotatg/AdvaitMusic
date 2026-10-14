@@ -38,6 +38,7 @@ public:
 private:
     struct Mounted {
         bool joined{false};
+        bool sending_video{false};
         mtproto::Client::GroupCallRef call;
     };
 

@@ -36,8 +36,9 @@ void handle_start(const tg::Message& m) {
 void handle_start_cb(const tg::CallbackQuery& cb) {
     auto& bot = tg::bot();
     bot.answer_callback(cb.query_id);
+    auto cb_name = utils::trim(cb.first_name + " " + cb.last_name);
     auto caption = F(cb.chat_id, "start_private",
-                     {{"user", utils::html_mention("user", cb.user_id)},
+                     {{"user", utils::html_mention(cb_name.empty() ? "user" : cb_name, cb.user_id)},
                       {"bot", utils::html_mention(bot.me_first_name(), bot.me_id())}});
     bot.edit_text(cb.chat_id, cb.message_id, caption, start_markup(cb.chat_id));
 }

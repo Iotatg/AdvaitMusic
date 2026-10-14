@@ -156,6 +156,11 @@ void RoomState::update_position() {
     updated_at_ = now;
 }
 
+void RoomState::tick_position() {
+    std::lock_guard<std::mutex> g(mu_);
+    update_position();
+}
+
 void RoomState::add_played_locked(const Track& t) {
     played_history_.push_back("id:" + t.id);
     auto n = normalize_track_title(t.title);

@@ -7,3 +7,6 @@ cache/
 *.log
 compile_commands.json
 vcpkg_installed/
+
+# Local voice-engine build artifacts (25MB+ binaries, absolute symlinks)
+lib/

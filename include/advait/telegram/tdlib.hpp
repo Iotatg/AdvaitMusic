@@ -35,6 +35,8 @@ struct CallbackQuery {
     int64_t user_id{0};
     int64_t query_id{0};
     std::string data;
+    std::string first_name;
+    std::string last_name;
     nlohmann::json raw;
 };
 
@@ -144,6 +146,11 @@ private:
     std::vector<std::pair<std::string, CallbackHandler>> callbacks_;
     std::vector<RawMessageHandler> message_hooks_;
     ChatMemberHandler chat_member_hook_;
+    // Sender display names learned from updateUser pushes (TDLib messages
+    // carry only sender_id, never names).
+    std::unordered_map<int64_t, std::pair<std::string, std::string>> user_names_;
+
+    std::pair<std::string, std::string> lookup_user_name(int64_t user_id);
 
     bool load_tdjson();
     void send_query(const nlohmann::json& q);

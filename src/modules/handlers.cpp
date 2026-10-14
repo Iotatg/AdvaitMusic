@@ -45,7 +45,8 @@ void handle_cancel(const tg::CallbackQuery& cb) {
 namespace {
 
 std::string cb_mention(const tg::CallbackQuery& cb) {
-    return utils::html_mention("user", cb.user_id);
+    auto name = utils::trim(cb.first_name + " " + cb.last_name);
+    return utils::html_mention(name.empty() ? "user" : name, cb.user_id);
 }
 
 tg::Message cb_as_message(const tg::CallbackQuery& cb) {

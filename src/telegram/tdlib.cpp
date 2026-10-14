@@ -758,6 +758,14 @@ void TdClient::handle_authorization(const nlohmann::json& state) {
     }
 }
 
+std::pair<std::string, std::string> TdClient::lookup_user_name(int64_t user_id) {
+    if (user_id == 0) return {};
+    std::lock_guard<std::mutex> g(mu_);
+    auto it = user_names_.find(user_id);
+    if (it == user_names_.end()) return {};
+    return it->second;
+}
+
 void TdClient::handle_message(const nlohmann::json& msg) {
     Message m;
     m.chat_id = msg.value("chat_id", 0LL);
@@ -767,6 +775,9 @@ void TdClient::handle_message(const nlohmann::json& msg) {
         auto s = msg["sender_id"];
         if (s.value("@type", "") == "messageSenderUser") m.sender_id = s.value("user_id", 0LL);
     }
+    auto names = lookup_user_name(m.sender_id);
+    m.first_name = names.first;
+    m.last_name = names.second;
     m.is_private = m.chat_id > 0;
     if (msg.contains("reply_to") && msg["reply_to"].is_object()) {
         m.reply_to = msg["reply_to"].value("message_id", 0LL);
@@ -839,6 +850,9 @@ void TdClient::handle_callback(const nlohmann::json& cb) {
     q.chat_id = cb.value("chat_id", 0LL);
     q.message_id = cb.value("message_id", 0LL);
     if (cb.contains("sender_user_id")) q.user_id = cb.value("sender_user_id", 0LL);
+    auto cb_names = lookup_user_name(q.user_id);
+    q.first_name = cb_names.first;
+    q.last_name = cb_names.second;
     auto payload = cb.value("payload", nlohmann::json::object());
     if (payload.contains("data")) {
         auto d = payload["data"];
@@ -957,6 +971,16 @@ void TdClient::process(const nlohmann::json& update) {
     }
     if (t == "updateNewMessage") {
         handle_message(update.value("message", nlohmann::json::object()));
+        return;
+    }
+    if (t == "updateUser") {
+        auto u = update.value("user", nlohmann::json::object());
+        auto uid = u.value("id", 0LL);
+        if (uid != 0) {
+            std::lock_guard<std::mutex> g(mu_);
+            user_names_[uid] = {u.value("first_name", ""), u.value("last_name", "")};
+            if (user_names_.size() > 2000) user_names_.clear();
+        }
         return;
     }
     if (t == "updateNewCallbackQuery") {

@@ -81,7 +81,7 @@ public:
     bool self_user_id(int64_t* out, std::string* err);
     // Join an active group call; on success *server_params receives updateGroupCallConnection params JSON.
     bool join_group_call(const GroupCallRef&, const std::string& params_json, std::string* server_params,
-                         std::string* err);
+                         std::string* err, bool send_video = false);
 
     // ---- channel membership (assistant auto-join, ChatState parity) ----
     // USER_ALREADY_PARTICIPANT is treated as success. Error text follows the
