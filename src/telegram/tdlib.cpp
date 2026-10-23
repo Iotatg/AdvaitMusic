@@ -120,6 +120,16 @@ bool TdClient::start_bot(int32_t api_id, const std::string& api_hash, const std:
     token_ = token;
     execute({{"@type", "setLogVerbosityLevel"}, {"new_verbosity_level", 1}});
     client_id_ = create_();
+    send_query({{"@type", "setTdlibParameters"},
+            {"database_directory", "database"},
+            {"use_message_database", true},
+            {"use_secret_chats", false},
+            {"api_id", api_id_},
+            {"api_hash", api_hash_},
+            {"system_language_code", "en"},
+            {"device_model", "AdvaitMusic-cpp"},
+            {"application_version", "1.0.0"},
+        });
     send_query({{"@type", "getOption"}, {"key", "version"}});
     running_ = true;
     loop_ = std::thread([this] {
