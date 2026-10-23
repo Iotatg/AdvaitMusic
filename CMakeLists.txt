@@ -175,6 +175,7 @@ add_library(advait_modules STATIC
     src/modules/group_admin.cpp
     src/modules/moderation.cpp
     src/modules/sticker.cpp
+    src/modules/chatbot.cpp
     src/modules/skip.cpp
     src/modules/pause.cpp
     src/modules/queue.cpp

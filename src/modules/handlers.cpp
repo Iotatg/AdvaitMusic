@@ -1,6 +1,7 @@
 #include "advait/modules/modules.hpp"
 #include "advait/modules/admin_lists.hpp"
 #include "advait/modules/admin_system.hpp"
+#include "advait/modules/chatbot.hpp"
 #include "advait/modules/common.hpp"
 #include "advait/modules/group_admin.hpp"
 #include "advait/modules/moderation.hpp"
@@ -378,6 +379,7 @@ void init(tg::TdClient& bot, AssistantManager* assistants) {
     init_group_admin(bot);
     init_moderation(bot);
     init_sticker(bot);
+    init_chatbot(bot);
     bot.on_message([](const tg::Message& m) { handle_voicechat_events(m); });
 
     start_room_monitor();
